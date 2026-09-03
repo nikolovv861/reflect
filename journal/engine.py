@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from typing import Callable, Iterator, Protocol
 
+from journal.practices import DEFAULT as DEFAULT_PRACTICE
+from journal.practices import load_practice
 from journal.prompts import load_prompt
 from journal.store import QUESTION, Page
 
@@ -63,19 +65,33 @@ class Engine:
         self,
         model_path: str = DEFAULT_MODEL,
         prompt_version: str = DEFAULT_PROMPT,
+        practice: str = DEFAULT_PRACTICE,
         chat_factory: Callable[[str], ChatLike] | None = None,
     ) -> None:
         factory = chat_factory or _default_factory
         self.prompt_version = prompt_version
+        self.practice = practice
         self._chat = factory(model_path)
         # Qwen3 emits reasoning tokens by default. They must never reach the
         # transcript, and they waste time we would rather spend on the answer.
         self._chat.set_template_variable("enable_thinking", False)
-        self._chat.set_system_prompt(load_prompt(prompt_version))
+        self._apply_system_prompt()
+
+    def _apply_system_prompt(self) -> None:
+        """Base question style, plus whatever frame the practice adds."""
+        parts = [load_prompt(self.prompt_version)]
+        addendum = load_practice(self.practice).addendum.strip()
+        if addendum:
+            parts.append(addendum)
+        self._chat.set_system_prompt("\n\n".join(parts))
 
     def set_prompt_version(self, prompt_version: str) -> None:
         self.prompt_version = prompt_version
-        self._chat.set_system_prompt(load_prompt(prompt_version))
+        self._apply_system_prompt()
+
+    def set_practice(self, practice: str) -> None:
+        self.practice = practice
+        self._apply_system_prompt()
 
     def ask(self, page: Page) -> Iterator[str]:
         # reset_history(), not reset(): reset() would also wipe the system

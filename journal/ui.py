@@ -1,4 +1,4 @@
-"""One page a day. You write down it; questions appear in the margin voice.
+"""One page a day, written inside a practice.
 
 Deliberately NOT a chat. There is no transcript pane, no input box, no send.
 Your words never leave the spot where you typed them -- that single property is
@@ -25,6 +25,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -36,8 +37,18 @@ from PySide6.QtWidgets import (
 )
 
 from journal.engine import DEFAULT_MODEL, DEFAULT_PROMPT, Engine, first_question
+from journal.practices import DEFAULT as DEFAULT_PRACTICE
+from journal.practices import list_practices, load_practice
 from journal.prompts import starters
-from journal.store import QUESTION, WRITING, Block, Page, open_day, save
+from journal.store import (
+    QUESTION,
+    WRITING,
+    Block,
+    Page,
+    open_day,
+    practice_day,
+    save,
+)
 
 JOURNAL_DIR = Path.home() / "Documents" / "journal"
 
@@ -50,10 +61,17 @@ IS_QUESTION = QTextFormat.UserProperty + 1
 PROPORTIONAL = QTextBlockFormat.LineHeightTypes.ProportionalHeight.value
 
 BODY_FONT = "Georgia"
-BODY_SIZE = 14
-INK = "#2b2b33"
-QUESTION_INK = "#9a93b5"
-PAPER = "#fdfcfa"
+BODY_SIZE = 15
+LINE_HEIGHT = 165.0
+# A readable measure is roughly 65 characters. Full-bleed text is the single
+# most common reason a writing app is unpleasant to read in.
+COLUMN_WIDTH = 660
+
+PAPER = "#fbf9f4"
+INK = "#33312c"
+QUESTION_INK = "#8f86a8"
+FAINT = "#a9a396"
+ACCENT = "#7a6fa8"
 
 
 class AskWorker(QThread):
@@ -93,7 +111,7 @@ class Window(QMainWindow):
     ):
         super().__init__()
         self.setWindowTitle("reflect")
-        self.resize(720, 860)
+        self.resize(940, 900)
 
         self.model_path = model_path
         self.journal_dir = journal_dir or JOURNAL_DIR
@@ -102,61 +120,16 @@ class Window(QMainWindow):
         self._streaming = False
 
         self.page = open_day(self.journal_dir, model_path, DEFAULT_PROMPT, day)
+        self.practices = list_practices()
 
-        self.date_label = QLabel(self._date_heading())
-        self.date_label.setStyleSheet(
-            f"color:{QUESTION_INK}; font-family:{BODY_FONT}; font-size:12px;"
-            " letter-spacing:2px;"
-        )
-
-        self.editor = QTextEdit()
-        self.editor.setFrameStyle(0)
-        self.editor.setFont(QFont(BODY_FONT, BODY_SIZE))
-        self.editor.setStyleSheet(
-            f"QTextEdit {{ background:{PAPER}; color:{INK}; border:none;"
-            " selection-background-color:#ddd6f3; }}"
-        )
-        self.editor.document().setDocumentMargin(8)
-
-        self.ask_button = QPushButton("Ask me something")
-        self.ask_button.setMinimumHeight(38)
-        self.ask_button.setCursor(Qt.PointingHandCursor)
-        self.ask_button.clicked.connect(self.request_question)
-        self.ask_button.setStyleSheet(
-            "QPushButton { background:#7a6fa8; color:white; border:none;"
-            " border-radius:6px; padding:8px 18px; font-size:13px; }"
-            "QPushButton:hover { background:#8d82bb; }"
-            "QPushButton:disabled { background:#cfcbdb; }"
-        )
-
-        self.counter = QLabel("")
-        self.counter.setStyleSheet(f"color:{QUESTION_INK}; font-size:12px;")
-
-        controls = QHBoxLayout()
-        controls.addWidget(self.counter)
-        controls.addStretch(1)
-        controls.addWidget(self.ask_button)
-
-        layout = QVBoxLayout()
-        layout.setContentsMargins(48, 28, 48, 20)
-        layout.setSpacing(14)
-        layout.addWidget(self.date_label)
-        layout.addWidget(self.editor, 1)
-        layout.addLayout(controls)
-
-        container = QWidget()
-        container.setStyleSheet(f"background:{PAPER};")
-        container.setLayout(layout)
-        self.setCentralWidget(container)
-        self.setStatusBar(QStatusBar())
-
-        QShortcut(QKeySequence("Ctrl+Return"), self, self.request_question)
-        QShortcut(QKeySequence("Ctrl+S"), self, self.save_now)
-        QShortcut(QKeySequence(Qt.Key_Escape), self, self.stop_generation)
-
+        self._build_ui()
         self._render_page()
+        self._sync_practice_label()
         self.editor.textChanged.connect(self._update_counter)
         self._update_counter()
+
+        if not self.page.blocks:
+            self._seed_opening()
 
         # A journal must not lose work. Autosave rather than trusting the
         # writer to remember a shortcut.
@@ -166,17 +139,162 @@ class Window(QMainWindow):
 
         self.editor.setFocus()
 
-    # --- formatting -----------------------------------------------------
+    # --- construction ---------------------------------------------------
 
-    def _date_heading(self) -> str:
-        return self.page.day.strftime("%A, %d %B %Y").upper()
+    def _build_ui(self) -> None:
+        self.date_label = QLabel(self.page.day.strftime("%A, %d %B %Y").upper())
+        self.date_label.setStyleSheet(
+            f"color:{FAINT}; font-family:{BODY_FONT}; font-size:11px;"
+            " letter-spacing:2px;"
+        )
+
+        self.practice_box = QComboBox()
+        for practice in self.practices:
+            self.practice_box.addItem(practice.name, practice.slug)
+        index = self.practice_box.findData(self.page.practice)
+        self.practice_box.setCurrentIndex(index if index >= 0 else 0)
+        self.practice_box.setCursor(Qt.PointingHandCursor)
+        self.practice_box.setStyleSheet(
+            f"QComboBox {{ border:none; color:{ACCENT}; font-size:12px;"
+            f" background:transparent; padding:2px 6px; }}"
+            f"QComboBox::drop-down {{ border:none; width:16px; }}"
+            f"QComboBox QAbstractItemView {{ background:white; color:{INK};"
+            f" selection-background-color:#ece8f6; padding:4px; }}"
+        )
+        self.practice_box.currentIndexChanged.connect(self._on_practice_changed)
+
+        header = QHBoxLayout()
+        header.addWidget(self.date_label)
+        header.addStretch(1)
+        header.addWidget(self.practice_box)
+
+        self.arc_label = QLabel("")
+        self.arc_label.setStyleSheet(
+            f"color:{FAINT}; font-size:11px; letter-spacing:1px;"
+        )
+
+        self.editor = QTextEdit()
+        self.editor.setFrameStyle(0)
+        self.editor.setFont(QFont(BODY_FONT, BODY_SIZE))
+        self.editor.setStyleSheet(
+            f"QTextEdit {{ background:{PAPER}; color:{INK}; border:none;"
+            " selection-background-color:#e3ddf3; }}"
+            "QScrollBar:vertical { background:transparent; width:8px; }"
+            f"QScrollBar::handle:vertical {{ background:#ddd8cc;"
+            " border-radius:4px; }"
+            "QScrollBar::add-line, QScrollBar::sub-line { height:0; }"
+        )
+        self.editor.document().setDocumentMargin(0)
+        self.editor.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        self.ask_button = QPushButton("Ask me something")
+        self.ask_button.setMinimumHeight(38)
+        self.ask_button.setCursor(Qt.PointingHandCursor)
+        self.ask_button.clicked.connect(self.request_question)
+        self.ask_button.setStyleSheet(
+            f"QPushButton {{ background:{ACCENT}; color:white; border:none;"
+            " border-radius:6px; padding:8px 20px; font-size:13px; }"
+            "QPushButton:hover { background:#8d82bb; }"
+            "QPushButton:disabled { background:#d5d1c6; }"
+        )
+
+        self.counter = QLabel("")
+        self.counter.setStyleSheet(f"color:{FAINT}; font-size:11px;")
+
+        controls = QHBoxLayout()
+        controls.addWidget(self.counter)
+        controls.addStretch(1)
+        controls.addWidget(self.ask_button)
+
+        column = QVBoxLayout()
+        column.setContentsMargins(0, 36, 0, 24)
+        column.setSpacing(10)
+        column.addLayout(header)
+        column.addWidget(self.arc_label)
+        column.addSpacing(14)
+        column.addWidget(self.editor, 1)
+        column.addSpacing(8)
+        column.addLayout(controls)
+
+        holder = QWidget()
+        holder.setMaximumWidth(COLUMN_WIDTH)
+        holder.setLayout(column)
+
+        centred = QHBoxLayout()
+        centred.setContentsMargins(0, 0, 0, 0)
+        centred.addStretch(1)
+        centred.addWidget(holder)
+        centred.addStretch(1)
+
+        container = QWidget()
+        container.setStyleSheet(f"background:{PAPER};")
+        container.setLayout(centred)
+        self.setCentralWidget(container)
+        self.setStatusBar(QStatusBar())
+        self.statusBar().setStyleSheet(
+            f"color:{FAINT}; font-size:11px; background:{PAPER};"
+        )
+
+        QShortcut(QKeySequence("Ctrl+Return"), self, self.request_question)
+        QShortcut(QKeySequence("Ctrl+S"), self, self.save_now)
+        QShortcut(QKeySequence(Qt.Key_Escape), self, self.stop_generation)
+
+    # --- practices ------------------------------------------------------
+
+    @property
+    def practice(self):
+        return load_practice(self.page.practice)
+
+    def _day_index(self) -> int:
+        if self.practice.is_open_ended:
+            return 0
+        return practice_day(self.journal_dir, self.page.practice, self.page.day) - 1
+
+    def _sync_practice_label(self) -> None:
+        practice = self.practice
+        if practice.is_open_ended or practice.arc == 1:
+            self.arc_label.setText("")
+            self.arc_label.hide()
+            return
+        day = self._day_index() + 1
+        self.arc_label.setText(
+            f"{practice.name.upper()} · DAY {min(day, practice.arc)} OF {practice.arc}"
+        )
+        self.arc_label.show()
+
+    def _on_practice_changed(self, _index: int) -> None:
+        slug = self.practice_box.currentData()
+        if not slug or slug == self.page.practice:
+            return
+        self.page.practice = slug
+        if self.engine is not None:
+            self.engine.set_practice(slug)
+        self._sync_practice_label()
+        self._seed_opening()
+        self.save_now()
+
+    def _seed_opening(self) -> None:
+        """Put the practice's prompt on the page so it is never blank."""
+        opening = self.practice.opening_for(self._day_index())
+        if not opening:
+            self.editor.setPlaceholderText(
+                random.choice(starters()) + "\n\nStart writing…"
+            )
+            return
+        cursor = self.editor.textCursor()
+        self._open_question_block(cursor)
+        cursor.insertText(opening)
+        self._start_writing_block(cursor)
+        self.editor.setFocus()
+
+    # --- formatting -----------------------------------------------------
 
     def _writing_format(self) -> tuple[QTextBlockFormat, QTextCharFormat]:
         bf = QTextBlockFormat()
         bf.setProperty(IS_QUESTION, False)
         bf.setTopMargin(0)
-        bf.setBottomMargin(10)
-        bf.setLineHeight(150.0, PROPORTIONAL)
+        bf.setBottomMargin(12)
+        bf.setLineHeight(LINE_HEIGHT, PROPORTIONAL)
         cf = QTextCharFormat()
         cf.setFont(QFont(BODY_FONT, BODY_SIZE))
         cf.setForeground(QColor(INK))
@@ -186,10 +304,10 @@ class Window(QMainWindow):
     def _question_format(self) -> tuple[QTextBlockFormat, QTextCharFormat]:
         bf = QTextBlockFormat()
         bf.setProperty(IS_QUESTION, True)
-        bf.setLeftMargin(24)
-        bf.setTopMargin(10)
-        bf.setBottomMargin(12)
-        bf.setLineHeight(150.0, PROPORTIONAL)
+        bf.setLeftMargin(26)
+        bf.setTopMargin(14)
+        bf.setBottomMargin(16)
+        bf.setLineHeight(LINE_HEIGHT, PROPORTIONAL)
         cf = QTextCharFormat()
         cf.setFont(QFont(BODY_FONT, BODY_SIZE - 1))
         cf.setForeground(QColor(QUESTION_INK))
@@ -199,7 +317,6 @@ class Window(QMainWindow):
     # --- rendering ------------------------------------------------------
 
     def _render_page(self) -> None:
-        """Paint the stored page into the editor."""
         self.editor.blockSignals(True)
         self.editor.clear()
         cursor = self.editor.textCursor()
@@ -227,9 +344,14 @@ class Window(QMainWindow):
             cursor.setCharFormat(cf)
             self.editor.setTextCursor(cursor)
             self.editor.setCurrentCharFormat(cf)
-            self.editor.setPlaceholderText(
-                random.choice(starters()) + "\n\nStart writing…"
-            )
+
+    def _open_question_block(self, cursor: QTextCursor) -> None:
+        bf, cf = self._question_format()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        if self.editor.document().lastBlock().text().strip():
+            cursor.insertBlock()
+        cursor.setBlockFormat(bf)
+        cursor.setCharFormat(cf)
 
     def _start_writing_block(self, cursor: QTextCursor) -> None:
         """Open a fresh, un-styled paragraph for the writer to continue in."""
@@ -287,7 +409,9 @@ class Window(QMainWindow):
         self.statusBar().showMessage("Loading model…")
         QApplication.processEvents()
         try:
-            self.engine = Engine(self.model_path, DEFAULT_PROMPT)
+            self.engine = Engine(
+                self.model_path, DEFAULT_PROMPT, self.page.practice
+            )
         except Exception as exc:  # noqa: BLE001
             self.statusBar().showMessage(f"Model unavailable — {exc}")
             return None
@@ -310,6 +434,8 @@ class Window(QMainWindow):
         if engine is None:
             self._reset_button()
             return
+        if engine.practice != self.page.practice:
+            engine.set_practice(self.page.practice)
 
         self._streaming = False
         self.statusBar().showMessage("Thinking…")
@@ -318,14 +444,6 @@ class Window(QMainWindow):
         self.worker.finished_ok.connect(self.on_question)
         self.worker.failed.connect(self.on_failure)
         self.worker.start()
-
-    def _open_question_block(self, cursor: QTextCursor) -> None:
-        bf, cf = self._question_format()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        if self.editor.document().lastBlock().text().strip():
-            cursor.insertBlock()
-        cursor.setBlockFormat(bf)
-        cursor.setCharFormat(cf)
 
     def on_token(self, chunk: str) -> None:
         cursor = self.editor.textCursor()

@@ -55,6 +55,29 @@ ImportError: nobodywho.abi3.so: undefined symbol: __isoc23_strtoll
 Ubuntu 24.04 or newer should work. This is an upstream packaging issue, not a
 bug in this project. The Godot GDExtension has the same requirement.
 
+## Practices
+
+A blank page gives you nothing to write toward, and gives the model nothing
+specific to work with — so the questions come back generic. Pick a practice on
+the date line and the page opens with a real prompt already on it.
+
+| Practice | What you're doing | Arc |
+|---|---|---|
+| Free writing | whatever you want | open |
+| Attention inventory | where your attention went, whether you put it there or it was hijacked, and what you felt just before | 7 days |
+| Life as a story | the title and theme of your story, the chapter you're in, the narrative you keep because it's familiar | 14 days |
+| Core values | the three that matter most, where each came from, what each has cost | one-off |
+
+Each practice also extends the system prompt, so a follow-up inside Attention
+Inventory digs at the hijack rather than asking something generic.
+
+**Practices have an arc, not a streak.** The header reads
+`ATTENTION INVENTORY · DAY 3 OF 7` — a thing with an ending, which is a reason
+to come back that cannot be broken. It counts days you *wrote*, never days you
+missed. Skip Tuesday and Wednesday is still day 4. There is no calendar, no
+score, and no notification, on purpose: an app that grades your diary is one
+you delete after a week.
+
 ## How it works
 
 Four pieces, deliberately separable:
@@ -63,7 +86,8 @@ Four pieces, deliberately separable:
 |---|---|
 | `journal/store.py` | Sessions as Markdown on disk. Knows nothing about AI. |
 | `journal/engine.py` | Wraps NobodyWho. Knows nothing about the UI or disk. |
-| `journal/prompts/` | The system prompts, as versioned files. Not code. |
+| `journal/prompts/` | Question-style prompts, as versioned files. Not code. |
+| `journal/practices/` | The reflective frames, as files. Not code. |
 | `journal/ui.py` | The page. Knows nothing about the model. |
 
 The unit is the **day**, not a session. Pages are saved to
@@ -126,7 +150,7 @@ people delete after a week.
 python -m pytest
 ```
 
-37 tests, no model required — the engine is tested against a stub, so the suite
+44 tests, no model required — the engine is tested against a stub, so the suite
 runs in well under a second. The UI tests cover the one genuinely fragile part:
 whether a question stays marked as a question through editing, saving and
 reopening, rather than bleeding into your own words.

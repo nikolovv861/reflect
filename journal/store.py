@@ -31,6 +31,7 @@ class Page:
     day: Date
     model: str
     prompt_version: str
+    practice: str = "free"
     blocks: list[Block] = field(default_factory=list)
 
     @property
@@ -44,6 +45,7 @@ def render(page: Page) -> str:
         f"date: {page.day.isoformat()}",
         f"model: {page.model}",
         f"prompt_version: {page.prompt_version}",
+        f"practice: {page.practice}",
         "---",
         "",
     ]
@@ -101,6 +103,7 @@ def parse(text: str) -> Page:
         day=day,
         model=meta.get("model", "unknown"),
         prompt_version=meta.get("prompt_version", "unknown"),
+        practice=meta.get("practice", "free"),
         blocks=blocks,
     )
 
@@ -135,6 +138,26 @@ def open_day(
         page.prompt_version = prompt_version
         return page
     return Page(day=day, model=model, prompt_version=prompt_version)
+
+
+def practice_day(directory: Path, practice: str, upto: Date) -> int:
+    """Which day of a practice `upto` is -- 1-based, counting only days written.
+
+    Deliberately counts days PRESENT, never days missed. Skip Tuesday and
+    Wednesday is still the next day of the practice, not a broken streak.
+    """
+    count = 0
+    for path in list_pages(directory):
+        try:
+            day = Date.fromisoformat(path.stem)
+        except ValueError:
+            continue
+        if day > upto:
+            continue
+        page = load(path)
+        if page.practice == practice and (page.blocks or day == upto):
+            count += 1
+    return max(1, count)
 
 
 def list_pages(directory: Path) -> list[Path]:

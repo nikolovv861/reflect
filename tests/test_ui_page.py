@@ -104,3 +104,55 @@ def test_asking_with_an_empty_page_is_refused(window):
     window.request_question()
     assert "Write something first." in window.statusBar().currentMessage()
     assert window.ask_button.isEnabled()
+
+
+# --- practices -------------------------------------------------------------
+
+
+def test_free_writing_leaves_the_page_blank(window):
+    assert window.page.practice == "free"
+    assert window.harvest() == []
+
+
+def test_choosing_a_practice_seeds_its_opening_as_a_question(window):
+    window.practice_box.setCurrentIndex(window.practice_box.findData("attention"))
+    blocks = window.harvest()
+    assert window.page.practice == "attention"
+    assert blocks and blocks[0].kind == QUESTION
+    assert "attention" in blocks[0].text.lower()
+
+
+def test_writing_after_a_seeded_opening_is_your_own(window):
+    window.practice_box.setCurrentIndex(window.practice_box.findData("attention"))
+    window.editor.insertPlainText("On my phone, and it just ended up there.")
+    blocks = window.harvest()
+    assert [b.kind for b in blocks] == [QUESTION, WRITING]
+    assert blocks[1].text == "On my phone, and it just ended up there."
+
+
+def test_practice_is_persisted_and_restored(window, tmp_path):
+    window.practice_box.setCurrentIndex(window.practice_box.findData("story"))
+    window.editor.insertPlainText("A chapter about waiting.")
+    window.save_now()
+    assert load(path_for(tmp_path, DAY)).practice == "story"
+
+    reopened = Window(model_path="model://none", journal_dir=tmp_path, day=DAY)
+    try:
+        assert reopened.page.practice == "story"
+        assert reopened.practice_box.currentData() == "story"
+    finally:
+        reopened._autosave.stop()
+
+
+def test_arc_label_counts_days_present_never_days_missed(window):
+    window.practice_box.setCurrentIndex(window.practice_box.findData("attention"))
+    assert "DAY 1 OF 7" in window.arc_label.text()
+
+
+def test_open_ended_practice_shows_no_arc_label(window):
+    assert window.arc_label.text() == ""
+
+
+def test_one_off_practice_shows_no_arc_label(window):
+    window.practice_box.setCurrentIndex(window.practice_box.findData("values"))
+    assert window.arc_label.text() == ""

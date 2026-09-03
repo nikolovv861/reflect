@@ -5,3 +5,4 @@ __pycache__/
 fixtures/results/
 fixtures/entries/*
 !fixtures/entries/README.md
+*.egg-info/

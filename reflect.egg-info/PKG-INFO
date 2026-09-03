@@ -1,9 +1,0 @@
-Metadata-Version: 2.4
-Name: reflect
-Version: 0.1.0
-Summary: A local-only journal that asks you one good question
-Requires-Python: >=3.10
-Requires-Dist: nobodywho>=2.0.0
-Requires-Dist: PySide6>=6.6
-Provides-Extra: dev
-Requires-Dist: pytest>=8.0; extra == "dev"

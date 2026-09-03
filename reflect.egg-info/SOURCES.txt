@@ -1,8 +1,0 @@
-pyproject.toml
-journal/__init__.py
-reflect.egg-info/PKG-INFO
-reflect.egg-info/SOURCES.txt
-reflect.egg-info/dependency_links.txt
-reflect.egg-info/entry_points.txt
-reflect.egg-info/requires.txt
-reflect.egg-info/top_level.txt

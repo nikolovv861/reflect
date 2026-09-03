@@ -20,8 +20,8 @@ _LABELS = {"ai": "You asked", "me": "They wrote"}
 
 class ChatLike(Protocol):
     def set_system_prompt(self, text: str) -> None: ...
-    def set_allow_thinking(self, value: bool) -> None: ...
-    def reset(self) -> None: ...
+    def set_template_variable(self, name: str, value) -> None: ...
+    def reset_history(self) -> None: ...
     def ask(self, prompt: str): ...
     def stop_generation(self) -> None: ...
 
@@ -60,7 +60,9 @@ class Engine:
         factory = chat_factory or _default_factory
         self.prompt_version = prompt_version
         self._chat = factory(model_path)
-        self._chat.set_allow_thinking(False)
+        # Qwen3 emits reasoning tokens by default. They must never reach the
+        # transcript, and they waste time we would rather spend on the answer.
+        self._chat.set_template_variable("enable_thinking", False)
         self._chat.set_system_prompt(load_prompt(prompt_version))
 
     def set_prompt_version(self, prompt_version: str) -> None:
@@ -68,7 +70,9 @@ class Engine:
         self._chat.set_system_prompt(load_prompt(prompt_version))
 
     def ask(self, session: Session) -> Iterator[str]:
-        self._chat.reset()
+        # reset_history(), not reset(): reset() would also wipe the system
+        # prompt, which is the entire product.
+        self._chat.reset_history()
         return iter(self._chat.ask(transcript(session)))
 
     def ask_text(self, session: Session) -> str:
@@ -76,3 +80,16 @@ class Engine:
 
     def stop(self) -> None:
         self._chat.stop_generation()
+
+    def close(self) -> None:
+        """Shut the native side down cleanly.
+
+        Without this, the Rust runtime panics on interpreter exit with
+        "threads should not terminate unexpectedly" -- which surfaces to the
+        user as a crash when they close the app.
+        """
+        try:
+            from nobodywho import cleanup_logging
+        except ImportError:
+            return
+        cleanup_logging()

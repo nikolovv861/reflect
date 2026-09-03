@@ -79,6 +79,8 @@ def main() -> int:
             lines.append(f"- **{variant}** -- {question}")
         lines.append("")
 
+    engine.close()
+
     RESULTS.mkdir(parents=True, exist_ok=True)
     out = RESULTS / f"{datetime.now():%Y-%m-%d-%H%M}.md"
     out.write_text("\n".join(lines), encoding="utf-8")

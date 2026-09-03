@@ -28,8 +28,14 @@ about two seconds, forever.
 - **Windows.** See the Linux note below.
 - Python 3.10+
 - ~8GB free RAM
-- A GPU is strongly recommended: with Vulkan, questions arrive in ~2s. On CPU
-  alone, expect 15–30s — usable, but it changes the feel.
+- A GPU is strongly recommended. On an RTX 2070, questions come back in
+  **well under a second**. On CPU alone, expect 15–30s — usable, but it changes
+  the feel.
+
+**The very first question is slow (~25s) even on a GPU.** That is a one-time
+Vulkan shader compile, not the model. Every question after it is sub-second.
+Run `python download_model.py` after installing to get the download and that
+first compile out of the way before you sit down to write.
 
 ## Linux note
 

@@ -13,7 +13,7 @@ class StubChat:
         self.model_path = model_path
         self.reply = reply
         self.system_prompt = None
-        self.thinking = None
+        self.template_vars = {}
         self.resets = 0
         self.prompts = []
         self.stopped = False
@@ -21,10 +21,10 @@ class StubChat:
     def set_system_prompt(self, text):
         self.system_prompt = text
 
-    def set_allow_thinking(self, value):
-        self.thinking = value
+    def set_template_variable(self, name, value):
+        self.template_vars[name] = value
 
-    def reset(self):
+    def reset_history(self):
         self.resets += 1
 
     def ask(self, prompt):
@@ -76,7 +76,7 @@ def test_first_question_returns_text_without_question_mark_unchanged():
 def test_engine_disables_thinking_and_sets_the_system_prompt():
     engine, chat = build()
     engine.ask_text(make_session(Turn("me", "A long day.")))
-    assert chat.thinking is False
+    assert chat.template_vars["enable_thinking"] is False
     assert "curious" in chat.system_prompt.lower()
 
 

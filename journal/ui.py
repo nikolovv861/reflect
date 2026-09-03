@@ -209,6 +209,11 @@ class Window(QMainWindow):
         if pending:
             self.append_turn("me", pending)
         self.save_now()
+        if self.worker and self.worker.isRunning():
+            self.stop_generation()
+            self.worker.wait(3000)
+        if self.engine is not None:
+            self.engine.close()
         event.accept()
 
 

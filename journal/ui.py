@@ -12,7 +12,9 @@ from PySide6.QtWidgets import (
     QApplication,
     QLabel,
     QMainWindow,
+    QHBoxLayout,
     QPlainTextEdit,
+    QPushButton,
     QStatusBar,
     QTextEdit,
     QVBoxLayout,
@@ -88,15 +90,31 @@ class Window(QMainWindow):
         for widget in (self.transcript, self.editor):
             widget.setFont(body)
 
-        self.hint = QLabel("Ctrl+Enter — ask · Ctrl+S — save · Esc — stop")
+        self.ask_button = QPushButton("Ask me something")
+        self.ask_button.setMinimumHeight(38)
+        self.ask_button.setCursor(Qt.PointingHandCursor)
+        self.ask_button.clicked.connect(self.request_question)
+        self.ask_button.setStyleSheet(
+            "QPushButton { background:#7a6fa8; color:white; border:none;"
+            " border-radius:6px; padding:8px 18px; font-size:13px; }"
+            "QPushButton:hover { background:#8d82bb; }"
+            "QPushButton:disabled { background:#c9c5d6; }"
+        )
+
+        self.hint = QLabel("or Ctrl+Enter · Ctrl+S saves · Esc stops")
         self.hint.setEnabled(False)
+
+        controls = QHBoxLayout()
+        controls.addWidget(self.hint)
+        controls.addStretch(1)
+        controls.addWidget(self.ask_button)
 
         layout = QVBoxLayout()
         layout.setContentsMargins(28, 24, 28, 16)
         layout.setSpacing(12)
         layout.addWidget(self.transcript, 3)
         layout.addWidget(self.editor, 2)
-        layout.addWidget(self.hint)
+        layout.addLayout(controls)
         container = QWidget()
         container.setLayout(layout)
         self.setCentralWidget(container)
@@ -157,12 +175,18 @@ class Window(QMainWindow):
         if not text or (self.worker and self.worker.isRunning()):
             return
 
+        # Disable before the model load, which blocks: otherwise a second
+        # click can land while the first is still waiting on it.
+        self.ask_button.setEnabled(False)
+        self.ask_button.setText("Thinking…")
+
         self.append_turn("me", text)
         self.editor.clear()
         self.save_now()
 
         engine = self.ensure_engine()
         if engine is None:
+            self._reset_button()
             return
 
         self.statusBar().showMessage("Thinking…")
@@ -178,8 +202,13 @@ class Window(QMainWindow):
         self._streaming_started = True
         self._write(chunk, is_question=True, new_block=first)
 
+    def _reset_button(self) -> None:
+        self.ask_button.setEnabled(True)
+        self.ask_button.setText("Ask me something")
+
     def on_question(self, question: str) -> None:
         self.statusBar().clearMessage()
+        self._reset_button()
         if not self._streaming_started:
             self.append_turn("ai", question)
         else:
@@ -188,6 +217,7 @@ class Window(QMainWindow):
         self.editor.setFocus()
 
     def on_failure(self, message: str) -> None:
+        self._reset_button()
         self.statusBar().showMessage(f"No question this time — {message}")
 
     def stop_generation(self) -> None:

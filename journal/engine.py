@@ -71,6 +71,7 @@ class Engine:
         factory = chat_factory or _default_factory
         self.prompt_version = prompt_version
         self.practice = practice
+        self._context = ""
         self._chat = factory(model_path)
         # Qwen3 emits reasoning tokens by default. They must never reach the
         # transcript, and they waste time we would rather spend on the answer.
@@ -78,12 +79,25 @@ class Engine:
         self._apply_system_prompt()
 
     def _apply_system_prompt(self) -> None:
-        """Base question style, plus whatever frame the practice adds."""
+        """Base question style, the practice frame, then standing context."""
         parts = [load_prompt(self.prompt_version)]
         addendum = load_practice(self.practice).addendum.strip()
         if addendum:
             parts.append(addendum)
+        if self._context.strip():
+            parts.append(
+                "The writer has separately written down what matters to them:\n\n"
+                f"{self._context.strip()}\n\n"
+                "Draw on this only where it is genuinely relevant to what they "
+                "wrote today. Never quote it back at them, never remind them of "
+                "it, and never measure the day against it."
+            )
         self._chat.set_system_prompt("\n\n".join(parts))
+
+    def set_context(self, context: str) -> None:
+        """Standing notes -- values, goals -- that outlive a single day."""
+        self._context = context or ""
+        self._apply_system_prompt()
 
     def set_prompt_version(self, prompt_version: str) -> None:
         self.prompt_version = prompt_version

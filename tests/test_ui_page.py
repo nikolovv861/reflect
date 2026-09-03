@@ -13,6 +13,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
+from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from journal.store import QUESTION, WRITING, Block, load, path_for  # noqa: E402
@@ -156,3 +157,141 @@ def test_open_ended_practice_shows_no_arc_label(window):
 def test_one_off_practice_shows_no_arc_label(window):
     window.practice_box.setCurrentIndex(window.practice_box.findData("values"))
     assert window.arc_label.text() == ""
+
+
+# --- sidebar, notes, search ------------------------------------------------
+
+from datetime import date as _date  # noqa: E402
+
+from journal.store import (  # noqa: E402
+    Note,
+    Page,
+    list_notes,
+    load_note,
+    save,
+    save_note,
+)
+from journal.ui import NOTE, PAGE  # noqa: E402
+
+
+def _sidebar_entries(win):
+    out = []
+    for row in range(win.sidebar.count()):
+        item = win.sidebar.item(row)
+        out.append((item.data(Qt.UserRole), item.text()))
+    return out
+
+
+def test_sidebar_lists_today_even_before_anything_is_written(window):
+    keys = [d for d, _ in _sidebar_entries(window)]
+    assert (PAGE, DAY.isoformat()) in keys
+
+
+def test_sidebar_lists_past_days_newest_first(app, tmp_path):
+    from journal.store import WRITING as W
+
+    for d in (_date(2026, 9, 1), _date(2026, 9, 2)):
+        save(Page(day=d, model="m", prompt_version="v1",
+                  blocks=[Block(W, f"day {d.day}")]), tmp_path)
+    win = Window(model_path="model://none", journal_dir=tmp_path, day=DAY)
+    try:
+        pages = [k for (kind, k), _ in _sidebar_entries(win) if kind == PAGE]
+        assert pages == ["2026-09-03", "2026-09-02", "2026-09-01"]
+    finally:
+        win._autosave.stop()
+
+
+def test_opening_a_past_day_loads_it_without_losing_today(app, tmp_path):
+    from journal.store import WRITING as W
+
+    save(Page(day=_date(2026, 9, 1), model="m", prompt_version="v1",
+              blocks=[Block(W, "an older day")]), tmp_path)
+    win = Window(model_path="model://none", journal_dir=tmp_path, day=DAY)
+    try:
+        win.editor.insertPlainText("written today")
+        win.open_page(_date(2026, 9, 1))
+        assert win.page.day == _date(2026, 9, 1)
+        assert "an older day" in win.editor.toPlainText()
+        # Today was saved on the way out, not discarded.
+        assert "written today" in load(path_for(tmp_path, DAY)).blocks[0].text
+    finally:
+        win._autosave.stop()
+
+
+def test_notes_appear_in_the_sidebar_and_open(app, tmp_path):
+    save_note(tmp_path, Note("values", "Core values", "Curiosity."))
+    win = Window(model_path="model://none", journal_dir=tmp_path, day=DAY)
+    try:
+        assert (NOTE, "values") in [d for d, _ in _sidebar_entries(win)]
+        win.open_note("values")
+        assert win.mode == NOTE
+        assert win.editor.toPlainText() == "Curiosity."
+        # Notes are reference documents, so the Ask button is not offered.
+        assert win.ask_button.isHidden()
+    finally:
+        win._autosave.stop()
+
+
+def test_editing_a_note_saves_it_as_plain_text(app, tmp_path):
+    save_note(tmp_path, Note("values", "Core values", "Curiosity."))
+    win = Window(model_path="model://none", journal_dir=tmp_path, day=DAY)
+    try:
+        win.open_note("values")
+        win.editor.setPlainText("Curiosity. Honesty.")
+        win.save_now()
+        assert load_note(tmp_path, "values").text == "Curiosity. Honesty."
+    finally:
+        win._autosave.stop()
+
+
+def test_asking_is_refused_while_editing_a_note(app, tmp_path):
+    save_note(tmp_path, Note("values", "Core values", "Curiosity."))
+    win = Window(model_path="model://none", journal_dir=tmp_path, day=DAY)
+    try:
+        win.open_note("values")
+        win.request_question()  # must not crash or write into the note
+        assert load_note(tmp_path, "values").text == "Curiosity."
+    finally:
+        win._autosave.stop()
+
+
+def test_standing_context_gathers_every_note(app, tmp_path):
+    save_note(tmp_path, Note("values", "Core values", "Curiosity."))
+    save_note(tmp_path, Note("goal", "Goal", "Ship it."))
+    save_note(tmp_path, Note("empty", "Empty", "   "))
+    win = Window(model_path="model://none", journal_dir=tmp_path, day=DAY)
+    try:
+        ctx = win.standing_context()
+        assert "Core values: Curiosity." in ctx
+        assert "Goal: Ship it." in ctx
+        assert "Empty" not in ctx  # blank notes contribute nothing
+    finally:
+        win._autosave.stop()
+
+
+def test_search_filters_the_sidebar(app, tmp_path):
+    from journal.store import WRITING as W
+
+    save(Page(day=_date(2026, 9, 1), model="m", prompt_version="v1",
+              blocks=[Block(W, "the deadline slipped")]), tmp_path)
+    save_note(tmp_path, Note("values", "Core values", "nothing relevant"))
+    win = Window(model_path="model://none", journal_dir=tmp_path, day=DAY)
+    try:
+        win.search_box.setText("deadline")
+        keys = [d for d, _ in _sidebar_entries(win)]
+        assert (PAGE, "2026-09-01") in keys
+        assert (NOTE, "values") not in keys
+    finally:
+        win._autosave.stop()
+
+
+def test_clearing_search_restores_the_full_sidebar(app, tmp_path):
+    save_note(tmp_path, Note("values", "Core values", "Curiosity."))
+    win = Window(model_path="model://none", journal_dir=tmp_path, day=DAY)
+    try:
+        win.search_box.setText("zzzz")
+        assert (NOTE, "values") not in [d for d, _ in _sidebar_entries(win)]
+        win.search_box.setText("")
+        assert (NOTE, "values") in [d for d, _ in _sidebar_entries(win)]
+    finally:
+        win._autosave.stop()

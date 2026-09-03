@@ -132,3 +132,107 @@ def test_saving_twice_in_a_day_overwrites_one_file(tmp_path: Path):
 
 def test_list_pages_tolerates_missing_dir(tmp_path: Path):
     assert list_pages(tmp_path / "nope") == []
+
+
+# --- standing notes --------------------------------------------------------
+
+from journal.store import (  # noqa: E402
+    Note,
+    delete_note,
+    list_notes,
+    load_note,
+    parse_note,
+    recent_pages,
+    render_note,
+    save_note,
+    search,
+    slugify,
+)
+
+
+def test_slugify_handles_punctuation_and_spacing():
+    assert slugify("Core Values!") == "core-values"
+    assert slugify("  My   Goal  ") == "my-goal"
+    assert slugify("???") == "note"
+
+
+def test_note_round_trips():
+    note = Note("values", "Core values", "Curiosity.\n\nHonesty.")
+    assert parse_note("values", render_note(note)) == note
+
+
+def test_note_without_frontmatter_gets_a_title_from_its_slug():
+    assert parse_note("core-values", "just text").title == "Core Values"
+
+
+def test_notes_save_load_list_delete(tmp_path: Path):
+    save_note(tmp_path, Note("values", "Core values", "Curiosity."))
+    save_note(tmp_path, Note("goal", "Goal", "Ship the thing."))
+    assert [n.slug for n in list_notes(tmp_path)] == ["goal", "values"]
+    assert load_note(tmp_path, "values").text == "Curiosity."
+    delete_note(tmp_path, "goal")
+    assert [n.slug for n in list_notes(tmp_path)] == ["values"]
+
+
+def test_notes_live_beside_pages_not_among_them(tmp_path: Path):
+    """A note must never be mistaken for a day, or it corrupts the timeline."""
+    save_page = make_page()
+    save(save_page, tmp_path)
+    save_note(tmp_path, Note("values", "Core values", "Curiosity."))
+    assert [p.name for p in list_pages(tmp_path)] == ["2026-09-03.md"]
+    assert len(recent_pages(tmp_path)) == 1
+
+
+def test_recent_pages_is_newest_first(tmp_path: Path):
+    for d in (date(2026, 9, 1), date(2026, 9, 3), date(2026, 9, 2)):
+        save(Page(day=d, model="m", prompt_version="v1",
+                  blocks=[Block(WRITING, f"day {d.day}")]), tmp_path)
+    assert [p.day.day for p in recent_pages(tmp_path)] == [3, 2, 1]
+
+
+# --- search ----------------------------------------------------------------
+
+
+def test_search_finds_pages_and_notes(tmp_path: Path):
+    save(Page(day=date(2026, 9, 3), model="m", prompt_version="v1",
+              blocks=[Block(WRITING, "The deadline slipped again.")]), tmp_path)
+    save_note(tmp_path, Note("values", "Core values", "Honesty about deadlines."))
+
+    hits = search(tmp_path, "deadline")
+    assert {h.kind for h in hits} == {"page", "note"}
+    assert len(hits) == 2
+
+
+def test_search_is_case_insensitive_and_snippets_around_the_match(tmp_path: Path):
+    save(Page(day=date(2026, 9, 3), model="m", prompt_version="v1",
+              blocks=[Block(WRITING, "x" * 200 + " NEEDLE " + "y" * 200)]), tmp_path)
+    hit = search(tmp_path, "needle")[0]
+    assert "NEEDLE" in hit.snippet
+    assert hit.snippet.startswith("…")
+
+
+def test_search_ignores_questions_free_empty_query(tmp_path: Path):
+    save(Page(day=date(2026, 9, 3), model="m", prompt_version="v1",
+              blocks=[Block(WRITING, "hello")]), tmp_path)
+    assert search(tmp_path, "   ") == []
+
+
+def test_search_returns_nothing_for_a_miss(tmp_path: Path):
+    save(make_page(), tmp_path)
+    assert search(tmp_path, "zzzzzz") == []
+
+
+def test_seed_notes_creates_starters_once(tmp_path: Path):
+    from journal.store import seed_notes
+
+    assert seed_notes(tmp_path) is True
+    slugs = [n.slug for n in list_notes(tmp_path)]
+    assert slugs == ["core-values", "goal"]
+    assert "matter most" in load_note(tmp_path, "core-values").text
+
+    # Never a second time, and never over your edits.
+    edited = load_note(tmp_path, "goal")
+    edited.text = "mine now"
+    save_note(tmp_path, edited)
+    assert seed_notes(tmp_path) is False
+    assert load_note(tmp_path, "goal").text == "mine now"

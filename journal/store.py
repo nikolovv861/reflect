@@ -164,3 +164,181 @@ def list_pages(directory: Path) -> list[Path]:
     if not directory.exists():
         return []
     return sorted(directory.glob("*.md"))
+
+
+def recent_pages(directory: Path, limit: int | None = None) -> list[Page]:
+    """Every day written, newest first. This is how you reread your past."""
+    pages: list[Page] = []
+    for path in reversed(list_pages(directory)):
+        try:
+            Date.fromisoformat(path.stem)
+        except ValueError:
+            continue
+        pages.append(load(path))
+        if limit and len(pages) >= limit:
+            break
+    return pages
+
+
+# --- standing notes --------------------------------------------------------
+#
+# Undated documents that persist: core values, the goal, anything you return
+# to. A dated page is a record of one day; a note is a thing you keep editing.
+
+
+@dataclass
+class Note:
+    slug: str
+    title: str
+    text: str = ""
+
+    @property
+    def words(self) -> int:
+        return len(self.text.split())
+
+
+def notes_dir(directory: Path) -> Path:
+    return directory / "notes"
+
+
+def slugify(title: str) -> str:
+    kept = [c.lower() if c.isalnum() else "-" for c in title.strip()]
+    slug = "".join(kept)
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return slug.strip("-") or "note"
+
+
+def render_note(note: Note) -> str:
+    return f"---\ntitle: {note.title}\n---\n\n{note.text.strip()}\n"
+
+
+def parse_note(slug: str, raw: str) -> Note:
+    title = slug.replace("-", " ").title()
+    body = raw
+    if raw.startswith("---\n"):
+        end = raw.find("\n---", 4)
+        if end != -1:
+            for line in raw[4:end].splitlines():
+                key, _, value = line.partition(":")
+                if key.strip() == "title" and value.strip():
+                    title = value.strip()
+            body = raw[end + 4 :]
+    return Note(slug=slug, title=title, text=body.strip())
+
+
+def save_note(directory: Path, note: Note) -> Path:
+    target = notes_dir(directory)
+    target.mkdir(parents=True, exist_ok=True)
+    path = target / f"{note.slug}.md"
+    path.write_text(render_note(note), encoding="utf-8")
+    return path
+
+
+def load_note(directory: Path, slug: str) -> Note:
+    path = notes_dir(directory) / f"{slug}.md"
+    return parse_note(slug, path.read_text(encoding="utf-8"))
+
+
+def list_notes(directory: Path) -> list[Note]:
+    target = notes_dir(directory)
+    if not target.exists():
+        return []
+    return [
+        parse_note(p.stem, p.read_text(encoding="utf-8"))
+        for p in sorted(target.glob("*.md"))
+    ]
+
+
+SEEDS = {
+    "core-values": (
+        "Core values",
+        "The three things that matter most to you.\n\n"
+        "For each one:\n"
+        "- Why could you not live without it?\n"
+        "- Where did it come from -- what happened that made it matter?\n"
+        "- What has holding it actually cost you?\n"
+        "- What would a life that ignored it look like?\n\n"
+        "(Most people never spend five minutes on this. The point is not to "
+        "pick impressive values -- it is to find out which ones are already "
+        "running things.)\n",
+    ),
+    "goal": (
+        "Goal",
+        "What are you actually working toward right now?\n\n"
+        "- What is the project? One sentence.\n"
+        "- Which of your values does it serve? If none, that is worth "
+        "knowing.\n"
+        "- What does the smallest honest version of a good day on it look "
+        "like?\n"
+        "- What would tell you it is finished?\n",
+    ),
+}
+
+
+def seed_notes(directory: Path) -> bool:
+    """Create starter notes the first time, so the shelf is never bare.
+
+    Only ever runs when no notes directory exists. Never overwrites.
+    """
+    if notes_dir(directory).exists():
+        return False
+    for slug, (title, text) in SEEDS.items():
+        save_note(directory, Note(slug=slug, title=title, text=text))
+    return True
+
+
+def delete_note(directory: Path, slug: str) -> None:
+    path = notes_dir(directory) / f"{slug}.md"
+    if path.exists():
+        path.unlink()
+
+
+# --- search ----------------------------------------------------------------
+
+
+@dataclass
+class Hit:
+    kind: str  # "page" | "note"
+    key: str  # ISO date, or note slug
+    title: str
+    snippet: str
+
+
+def _snippet(text: str, needle: str, width: int = 70) -> str:
+    lowered = text.lower()
+    at = lowered.find(needle.lower())
+    if at == -1:
+        return text[:width].strip()
+    start = max(0, at - width // 3)
+    end = min(len(text), at + width)
+    prefix = "…" if start > 0 else ""
+    suffix = "…" if end < len(text) else ""
+    return prefix + text[start:end].replace("\n", " ").strip() + suffix
+
+
+def search(directory: Path, query: str) -> list[Hit]:
+    """Plain substring search across every page and note. Case-insensitive."""
+    needle = query.strip().lower()
+    if not needle:
+        return []
+    hits: list[Hit] = []
+
+    for page in recent_pages(directory):
+        body = "\n".join(b.text for b in page.blocks)
+        if needle in body.lower():
+            hits.append(
+                Hit(
+                    "page",
+                    page.day.isoformat(),
+                    page.day.strftime("%d %B %Y"),
+                    _snippet(body, needle),
+                )
+            )
+
+    for note in list_notes(directory):
+        haystack = f"{note.title}\n{note.text}"
+        if needle in haystack.lower():
+            hits.append(Hit("note", note.slug, note.title, _snippet(note.text, needle)))
+
+    return hits

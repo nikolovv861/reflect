@@ -78,6 +78,26 @@ missed. Skip Tuesday and Wednesday is still day 4. There is no calendar, no
 score, and no notification, on purpose: an app that grades your diary is one
 you delete after a week.
 
+## Notes and your past
+
+A sidebar holds two things beside the daily page:
+
+**Your past days**, newest first, with word counts. Click any of them to reread
+or keep writing. A journal you cannot reread is barely a journal, and this was
+missing for far too long.
+
+**Standing notes** — undated documents you keep editing rather than dated
+records: *Core values* and *Goal* are created for you on first run, already
+filled with the questions worth answering. Add your own with `Ctrl+N`.
+
+Notes are also **context for the questions**. What you wrote about what matters
+to you is given to the model as background, with an explicit instruction never
+to quote it back or measure your day against it. It informs the question; it
+does not become a scorecard.
+
+`Ctrl+F` searches everything — every day and every note — with snippets around
+the match.
+
 ## How it works
 
 Four pieces, deliberately separable:
@@ -88,6 +108,8 @@ Four pieces, deliberately separable:
 | `journal/engine.py` | Wraps NobodyWho. Knows nothing about the UI or disk. |
 | `journal/prompts/` | Question-style prompts, as versioned files. Not code. |
 | `journal/practices/` | The reflective frames, as files. Not code. |
+
+Pages live in `~/Documents/journal/`, notes in `~/Documents/journal/notes/`.
 | `journal/ui.py` | The page. Knows nothing about the model. |
 
 The unit is the **day**, not a session. Pages are saved to
@@ -150,7 +172,7 @@ people delete after a week.
 python -m pytest
 ```
 
-44 tests, no model required — the engine is tested against a stub, so the suite
+66 tests, no model required — the engine is tested against a stub, so the suite
 runs in well under a second. The UI tests cover the one genuinely fragile part:
 whether a question stays marked as a question through editing, saving and
 reopening, rather than bleeding into your own words.

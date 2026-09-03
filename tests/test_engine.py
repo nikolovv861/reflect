@@ -125,3 +125,18 @@ def test_stop_delegates_to_the_chat():
     engine.ask_text(make_page(Block(WRITING, "hi")))
     engine.stop()
     assert chat.stopped is True
+
+
+def test_standing_context_reaches_the_system_prompt():
+    engine, chat = build()
+    engine.set_context("Curiosity, honesty, and not wasting people's time.")
+    assert "Curiosity, honesty" in chat.system_prompt
+    # And it must be framed as background, never as a yardstick.
+    assert "never measure the day against it" in chat.system_prompt
+
+
+def test_empty_context_adds_nothing():
+    engine, chat = build()
+    before = chat.system_prompt
+    engine.set_context("   ")
+    assert chat.system_prompt == before

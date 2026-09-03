@@ -1,0 +1,117 @@
+import re
+
+from datetime import datetime
+
+from journal.engine import Engine, first_question
+from journal.store import Session, Turn
+
+
+class StubChat:
+    """Stands in for nobodywho.Chat so tests need no 2.5GB model."""
+
+    def __init__(self, model_path, reply="Why did you stop there?"):
+        self.model_path = model_path
+        self.reply = reply
+        self.system_prompt = None
+        self.thinking = None
+        self.resets = 0
+        self.prompts = []
+        self.stopped = False
+
+    def set_system_prompt(self, text):
+        self.system_prompt = text
+
+    def set_allow_thinking(self, value):
+        self.thinking = value
+
+    def reset(self):
+        self.resets += 1
+
+    def ask(self, prompt):
+        self.prompts.append(prompt)
+        # Real tokenizers carry their own whitespace, so tokens must rejoin
+        # into the original string. Splitting on spaces and dropping them
+        # would make the stub lie about how generation behaves.
+        return iter(re.findall(r"\S+\s*", self.reply))
+
+    def stop_generation(self):
+        self.stopped = True
+
+
+def make_session(*turns):
+    return Session(
+        started=datetime(2026, 9, 3, 14, 32),
+        model="stub",
+        prompt_version="v3-buried",
+        turns=list(turns),
+    )
+
+
+def build(reply="Why did you stop there?"):
+    captured = {}
+
+    def factory(model_path):
+        captured["chat"] = StubChat(model_path, reply)
+        return captured["chat"]
+
+    engine = Engine("model://stub", "v3-buried", chat_factory=factory)
+    return engine, captured["chat"]
+
+
+def test_first_question_truncates_to_one_question():
+    text = "What happened there? And why did you leave it out?"
+    assert first_question(text) == "What happened there?"
+
+
+def test_first_question_passes_through_a_single_question():
+    assert first_question("  What happened?  ") == "What happened?"
+
+
+def test_first_question_returns_text_without_question_mark_unchanged():
+    assert first_question("Tell me more about the review.") == (
+        "Tell me more about the review."
+    )
+
+
+def test_engine_disables_thinking_and_sets_the_system_prompt():
+    engine, chat = build()
+    engine.ask_text(make_session(Turn("me", "A long day.")))
+    assert chat.thinking is False
+    assert "curious" in chat.system_prompt.lower()
+
+
+def test_engine_resets_before_each_ask():
+    engine, chat = build()
+    session = make_session(Turn("me", "One."))
+    engine.ask_text(session)
+    engine.ask_text(session)
+    assert chat.resets == 2
+
+
+def test_prompt_includes_the_whole_transcript_with_speaker_labels():
+    engine, chat = build()
+    engine.ask_text(
+        make_session(Turn("ai", "How was your day?"), Turn("me", "Strange."))
+    )
+    sent = chat.prompts[0]
+    assert "How was your day?" in sent
+    assert "Strange." in sent
+
+
+def test_ask_streams_tokens():
+    engine, _ = build()
+    tokens = list(engine.ask(make_session(Turn("me", "hi"))))
+    assert len(tokens) > 1
+    assert "".join(tokens).strip().startswith("Why")
+
+
+def test_ask_text_truncates_a_two_question_reply():
+    engine, _ = build(reply="What happened? Also, why now?")
+    assert engine.ask_text(make_session(Turn("me", "hi"))) == "What happened?"
+
+
+def test_stop_delegates_to_the_chat():
+    engine, chat = build()
+    engine.ask_text(make_session(Turn("me", "hi")))
+    engine.stop()
+    assert chat.stopped is True

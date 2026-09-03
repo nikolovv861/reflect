@@ -1,50 +1,63 @@
-"""Journal sessions on disk, as plain Markdown.
+"""A day's journal page on disk, as plain Markdown.
 
 Deliberately dependency-free: a journal should outlive the app that wrote it.
+
+The unit is the DAY, not a session or a conversation. Opening the app twice on
+the same date continues one page rather than starting something new.
+
+Your own writing is stored as ordinary paragraphs. Questions are stored as
+Markdown blockquotes, so the file reads correctly in any editor and your words
+remain the bulk of it.
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
+from datetime import date as Date
 from datetime import datetime
 from pathlib import Path
 
-SPEAKERS = ("ai", "me")
-_TURN_RE = re.compile(r"^## (ai|me)\s*$", re.MULTILINE)
+WRITING = "me"
+QUESTION = "ai"
 
 
 @dataclass
-class Turn:
-    speaker: str
+class Block:
+    kind: str  # WRITING | QUESTION
     text: str
 
 
 @dataclass
-class Session:
-    started: datetime
+class Page:
+    day: Date
     model: str
     prompt_version: str
-    turns: list[Turn] = field(default_factory=list)
+    blocks: list[Block] = field(default_factory=list)
+
+    @property
+    def words(self) -> int:
+        return sum(len(b.text.split()) for b in self.blocks if b.kind == WRITING)
 
 
-def render(session: Session) -> str:
+def render(page: Page) -> str:
     lines = [
         "---",
-        f"started: {session.started.isoformat()}",
-        f"model: {session.model}",
-        f"prompt_version: {session.prompt_version}",
+        f"date: {page.day.isoformat()}",
+        f"model: {page.model}",
+        f"prompt_version: {page.prompt_version}",
         "---",
         "",
     ]
-    for turn in session.turns:
-        lines.append(f"## {turn.speaker}")
+    for block in page.blocks:
+        if block.kind == QUESTION:
+            for line in block.text.strip().splitlines():
+                lines.append(f"> {line}")
+        else:
+            lines.extend(block.text.strip("\n").splitlines())
         lines.append("")
-        lines.append(turn.text.strip())
-        lines.append("")
-    return "\n".join(lines)
+    return "\n".join(lines).rstrip() + "\n"
 
 
-def parse(text: str) -> Session:
+def parse(text: str) -> Page:
     meta: dict[str, str] = {}
     body = text
 
@@ -57,39 +70,74 @@ def parse(text: str) -> Session:
                     meta[key.strip()] = value.strip()
             body = text[end + 4 :]
 
-    turns: list[Turn] = []
-    matches = list(_TURN_RE.finditer(body))
-    for index, match in enumerate(matches):
-        start = match.end()
-        stop = matches[index + 1].start() if index + 1 < len(matches) else len(body)
-        turns.append(Turn(match.group(1), body[start:stop].strip()))
+    blocks: list[Block] = []
+    kind: str | None = None
+    buffer: list[str] = []
 
-    started_raw = meta.get("started", "")
+    def flush() -> None:
+        if kind is None:
+            return
+        joined = "\n".join(buffer).strip("\n")
+        if joined.strip():
+            blocks.append(Block(kind, joined))
+
+    for line in body.splitlines():
+        line_kind = QUESTION if line.startswith(">") else WRITING
+        content = line[1:].lstrip() if line_kind is QUESTION else line
+        if line_kind != kind:
+            flush()
+            kind = line_kind
+            buffer = [content]
+        else:
+            buffer.append(content)
+    flush()
+
     try:
-        started = datetime.fromisoformat(started_raw)
+        day = Date.fromisoformat(meta.get("date", ""))
     except ValueError:
-        started = datetime.min
+        day = Date.min
 
-    return Session(
-        started=started,
+    return Page(
+        day=day,
         model=meta.get("model", "unknown"),
         prompt_version=meta.get("prompt_version", "unknown"),
-        turns=turns,
+        blocks=blocks,
     )
 
 
-def save(session: Session, directory: Path) -> Path:
+def path_for(directory: Path, day: Date) -> Path:
+    return directory / f"{day.isoformat()}.md"
+
+
+def save(page: Page, directory: Path) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"{session.started:%Y-%m-%d-%H%M}.md"
-    path.write_text(render(session), encoding="utf-8")
+    path = path_for(directory, page.day)
+    path.write_text(render(page), encoding="utf-8")
     return path
 
 
-def load(path: Path) -> Session:
+def load(path: Path) -> Page:
     return parse(path.read_text(encoding="utf-8"))
 
 
-def list_sessions(directory: Path) -> list[Path]:
+def open_day(
+    directory: Path,
+    model: str,
+    prompt_version: str,
+    day: Date | None = None,
+) -> Page:
+    """Today's page, continued if it already exists."""
+    day = day or datetime.now().date()
+    path = path_for(directory, day)
+    if path.exists():
+        page = load(path)
+        page.model = model
+        page.prompt_version = prompt_version
+        return page
+    return Page(day=day, model=model, prompt_version=prompt_version)
+
+
+def list_pages(directory: Path) -> list[Path]:
     if not directory.exists():
         return []
     return sorted(directory.glob("*.md"))

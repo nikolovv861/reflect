@@ -1,9 +1,9 @@
 import re
 
-from datetime import datetime
+from datetime import date
 
 from journal.engine import Engine, first_question
-from journal.store import Session, Turn
+from journal.store import QUESTION, WRITING, Block, Page
 
 
 class StubChat:
@@ -38,12 +38,12 @@ class StubChat:
         self.stopped = True
 
 
-def make_session(*turns):
-    return Session(
-        started=datetime(2026, 9, 3, 14, 32),
+def make_page(*blocks):
+    return Page(
+        day=date(2026, 9, 3),
         model="stub",
         prompt_version="v3-buried",
-        turns=list(turns),
+        blocks=list(blocks),
     )
 
 
@@ -75,43 +75,53 @@ def test_first_question_returns_text_without_question_mark_unchanged():
 
 def test_engine_disables_thinking_and_sets_the_system_prompt():
     engine, chat = build()
-    engine.ask_text(make_session(Turn("me", "A long day.")))
+    engine.ask_text(make_page(Block(WRITING, "A long day.")))
     assert chat.template_vars["enable_thinking"] is False
     assert "curious" in chat.system_prompt.lower()
 
 
 def test_engine_resets_before_each_ask():
     engine, chat = build()
-    session = make_session(Turn("me", "One."))
+    session = make_page(Block(WRITING, "One."))
     engine.ask_text(session)
     engine.ask_text(session)
     assert chat.resets == 2
 
 
-def test_prompt_includes_the_whole_transcript_with_speaker_labels():
+def test_prompt_includes_the_whole_page():
     engine, chat = build()
     engine.ask_text(
-        make_session(Turn("ai", "How was your day?"), Turn("me", "Strange."))
+        make_page(Block(QUESTION, "How was your day?"), Block(WRITING, "Strange."))
     )
     sent = chat.prompts[0]
     assert "How was your day?" in sent
     assert "Strange." in sent
 
 
+def test_prompt_frames_the_page_as_a_document_not_a_chat():
+    engine, chat = build()
+    engine.ask_text(make_page(Block(WRITING, "A quiet day.")))
+    sent = chat.prompts[0]
+    assert "journal page" in sent
+    # No chat framing anywhere in what the model sees.
+    for tell in ("User:", "Assistant:", "They wrote", "You asked"):
+        assert tell not in sent
+
+
 def test_ask_streams_tokens():
     engine, _ = build()
-    tokens = list(engine.ask(make_session(Turn("me", "hi"))))
+    tokens = list(engine.ask(make_page(Block(WRITING, "hi"))))
     assert len(tokens) > 1
     assert "".join(tokens).strip().startswith("Why")
 
 
 def test_ask_text_truncates_a_two_question_reply():
     engine, _ = build(reply="What happened? Also, why now?")
-    assert engine.ask_text(make_session(Turn("me", "hi"))) == "What happened?"
+    assert engine.ask_text(make_page(Block(WRITING, "hi"))) == "What happened?"
 
 
 def test_stop_delegates_to_the_chat():
     engine, chat = build()
-    engine.ask_text(make_session(Turn("me", "hi")))
+    engine.ask_text(make_page(Block(WRITING, "hi")))
     engine.stop()
     assert chat.stopped is True

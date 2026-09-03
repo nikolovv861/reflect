@@ -17,7 +17,7 @@ from pathlib import Path
 
 from journal.engine import DEFAULT_MODEL, Engine
 from journal.prompts import list_prompts
-from journal.store import Session, Turn
+from journal.store import WRITING, Block, Page
 
 ENTRIES = Path("fixtures/entries")
 RESULTS = Path("fixtures/results")
@@ -33,12 +33,12 @@ def load_entries() -> list[tuple[str, str]]:
     ]
 
 
-def as_session(text: str) -> Session:
-    return Session(
-        started=datetime.now(),
+def as_page(text: str) -> Page:
+    return Page(
+        day=datetime.now().date(),
         model=DEFAULT_MODEL,
         prompt_version="harness",
-        turns=[Turn("me", text)],
+        blocks=[Block(WRITING, text)],
     )
 
 
@@ -74,7 +74,7 @@ def main() -> int:
         lines += [f"## {name}", "", f"_{words} words_", ""]
         for variant in variants:
             engine.set_prompt_version(variant)
-            question = engine.ask_text(as_session(text))
+            question = engine.ask_text(as_page(text))
             print(f"  {variant:<16} -> {question}", flush=True)
             lines.append(f"- **{variant}** -- {question}")
         lines.append("")

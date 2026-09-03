@@ -8,14 +8,14 @@ from __future__ import annotations
 from typing import Callable, Iterator, Protocol
 
 from journal.prompts import load_prompt
-from journal.store import Session
+from journal.store import QUESTION, Page
 
 DEFAULT_MODEL = (
     "huggingface:NobodyWho/Qwen_Qwen3-4B-GGUF/Qwen_Qwen3-4B-Q4_K_M.gguf"
 )
 DEFAULT_PROMPT = "v3-buried"
 
-_LABELS = {"ai": "You asked", "me": "They wrote"}
+_ASKED = "A question you put to them earlier:"
 
 
 class ChatLike(Protocol):
@@ -41,12 +41,20 @@ def _default_factory(model_path: str) -> ChatLike:
     return Chat(model_path)
 
 
-def transcript(session: Session) -> str:
-    parts = [
-        f"{_LABELS.get(turn.speaker, turn.speaker)}:\n{turn.text}"
-        for turn in session.turns
-    ]
-    parts.append("Ask one question.")
+def page_text(page: Page) -> str:
+    """The day's page as the model sees it.
+
+    Not a chat transcript -- a document. Prior questions are included as
+    context so the model does not repeat itself, but they are framed as notes
+    in the margin rather than turns in a conversation.
+    """
+    parts = [f"This is today's journal page, written on {page.day.isoformat()}."]
+    for block in page.blocks:
+        if block.kind == QUESTION:
+            parts.append(f"{_ASKED}\n{block.text}")
+        else:
+            parts.append(block.text)
+    parts.append("Ask one question about the page above.")
     return "\n\n".join(parts)
 
 
@@ -69,14 +77,14 @@ class Engine:
         self.prompt_version = prompt_version
         self._chat.set_system_prompt(load_prompt(prompt_version))
 
-    def ask(self, session: Session) -> Iterator[str]:
+    def ask(self, page: Page) -> Iterator[str]:
         # reset_history(), not reset(): reset() would also wipe the system
         # prompt, which is the entire product.
         self._chat.reset_history()
-        return iter(self._chat.ask(transcript(session)))
+        return iter(self._chat.ask(page_text(page)))
 
-    def ask_text(self, session: Session) -> str:
-        return first_question("".join(self.ask(session)))
+    def ask_text(self, page: Page) -> str:
+        return first_question("".join(self.ask(page)))
 
     def stop(self) -> None:
         self._chat.stop_generation()

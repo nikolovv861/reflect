@@ -1,19 +1,33 @@
-"""A text area, a key, and one question back."""
+"""One page a day. You write down it; questions appear in the margin voice.
+
+Deliberately NOT a chat. There is no transcript pane, no input box, no send.
+Your words never leave the spot where you typed them -- that single property is
+most of what separates a journal from a chatbot.
+"""
 from __future__ import annotations
 
 import random
 import sys
+from datetime import date as Date
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QColor, QFont, QKeySequence, QShortcut, QTextCharFormat
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QKeySequence,
+    QShortcut,
+    QTextBlockFormat,
+    QTextCharFormat,
+    QTextCursor,
+    QTextFormat,
+)
 from PySide6.QtWidgets import (
     QApplication,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
-    QHBoxLayout,
-    QPlainTextEdit,
     QPushButton,
     QStatusBar,
     QTextEdit,
@@ -23,32 +37,41 @@ from PySide6.QtWidgets import (
 
 from journal.engine import DEFAULT_MODEL, DEFAULT_PROMPT, Engine, first_question
 from journal.prompts import starters
-from journal.store import Session, Turn, save
+from journal.store import QUESTION, WRITING, Block, Page, open_day, save
 
 JOURNAL_DIR = Path.home() / "Documents" / "journal"
 
+# Marks a paragraph as a question rather than the writer's own words. Lives on
+# the block format so it survives editing and cannot bleed into typed text the
+# way a character format would.
+IS_QUESTION = QTextFormat.UserProperty + 1
+
+# PySide6 wants a plain int for the line-height type, not the enum.
+PROPORTIONAL = QTextBlockFormat.LineHeightTypes.ProportionalHeight.value
+
+BODY_FONT = "Georgia"
+BODY_SIZE = 14
+INK = "#2b2b33"
+QUESTION_INK = "#9a93b5"
+PAPER = "#fdfcfa"
+
 
 class AskWorker(QThread):
-    """Generation off the UI thread, so typing never blocks on the model."""
-
     token = Signal(str)
     finished_ok = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, engine: Engine, session: Session):
+    def __init__(self, engine: Engine, page: Page):
         super().__init__()
         self._engine = engine
-        self._session = session
+        self._page = page
 
     def run(self):
         try:
             accumulated = ""
             emitted = 0
-            for tok in self._engine.ask(self._session):
+            for tok in self._engine.ask(self._page):
                 accumulated += tok
-                # Only ever show text up to the first question mark, so a
-                # rambling second question never flashes on screen before
-                # being truncated away.
                 visible = first_question(accumulated)
                 if len(visible) > emitted:
                     self.token.emit(visible[emitted:])
@@ -62,33 +85,38 @@ class AskWorker(QThread):
 
 
 class Window(QMainWindow):
-    def __init__(self, model_path: str = DEFAULT_MODEL):
+    def __init__(
+        self,
+        model_path: str = DEFAULT_MODEL,
+        journal_dir: Path | None = None,
+        day: Date | None = None,
+    ):
         super().__init__()
         self.setWindowTitle("reflect")
-        self.resize(760, 820)
+        self.resize(720, 860)
 
         self.model_path = model_path
-        self.session = Session(
-            started=datetime.now(),
-            model=model_path,
-            prompt_version=DEFAULT_PROMPT,
-            turns=[],
-        )
+        self.journal_dir = journal_dir or JOURNAL_DIR
         self.engine: Engine | None = None
         self.worker: AskWorker | None = None
-        self._streaming_started = False
+        self._streaming = False
 
-        self.transcript = QTextEdit(readOnly=True)
-        self.transcript.setFrameStyle(0)
-        self.editor = QPlainTextEdit()
-        self.editor.setFrameStyle(0)
-        self.editor.setPlaceholderText(
-            "Write. Ctrl+Enter when you want a question."
+        self.page = open_day(self.journal_dir, model_path, DEFAULT_PROMPT, day)
+
+        self.date_label = QLabel(self._date_heading())
+        self.date_label.setStyleSheet(
+            f"color:{QUESTION_INK}; font-family:{BODY_FONT}; font-size:12px;"
+            " letter-spacing:2px;"
         )
 
-        body = QFont("Georgia", 13)
-        for widget in (self.transcript, self.editor):
-            widget.setFont(body)
+        self.editor = QTextEdit()
+        self.editor.setFrameStyle(0)
+        self.editor.setFont(QFont(BODY_FONT, BODY_SIZE))
+        self.editor.setStyleSheet(
+            f"QTextEdit {{ background:{PAPER}; color:{INK}; border:none;"
+            " selection-background-color:#ddd6f3; }}"
+        )
+        self.editor.document().setDocumentMargin(8)
 
         self.ask_button = QPushButton("Ask me something")
         self.ask_button.setMinimumHeight(38)
@@ -98,24 +126,26 @@ class Window(QMainWindow):
             "QPushButton { background:#7a6fa8; color:white; border:none;"
             " border-radius:6px; padding:8px 18px; font-size:13px; }"
             "QPushButton:hover { background:#8d82bb; }"
-            "QPushButton:disabled { background:#c9c5d6; }"
+            "QPushButton:disabled { background:#cfcbdb; }"
         )
 
-        self.hint = QLabel("or Ctrl+Enter · Ctrl+S saves · Esc stops")
-        self.hint.setEnabled(False)
+        self.counter = QLabel("")
+        self.counter.setStyleSheet(f"color:{QUESTION_INK}; font-size:12px;")
 
         controls = QHBoxLayout()
-        controls.addWidget(self.hint)
+        controls.addWidget(self.counter)
         controls.addStretch(1)
         controls.addWidget(self.ask_button)
 
         layout = QVBoxLayout()
-        layout.setContentsMargins(28, 24, 28, 16)
-        layout.setSpacing(12)
-        layout.addWidget(self.transcript, 3)
-        layout.addWidget(self.editor, 2)
+        layout.setContentsMargins(48, 28, 48, 20)
+        layout.setSpacing(14)
+        layout.addWidget(self.date_label)
+        layout.addWidget(self.editor, 1)
         layout.addLayout(controls)
+
         container = QWidget()
+        container.setStyleSheet(f"background:{PAPER};")
         container.setLayout(layout)
         self.setCentralWidget(container)
         self.setStatusBar(QStatusBar())
@@ -124,46 +154,140 @@ class Window(QMainWindow):
         QShortcut(QKeySequence("Ctrl+S"), self, self.save_now)
         QShortcut(QKeySequence(Qt.Key_Escape), self, self.stop_generation)
 
-        self.append_turn("ai", random.choice(starters()))
+        self._render_page()
+        self.editor.textChanged.connect(self._update_counter)
+        self._update_counter()
+
+        # A journal must not lose work. Autosave rather than trusting the
+        # writer to remember a shortcut.
+        self._autosave = QTimer(self)
+        self._autosave.timeout.connect(self.save_now)
+        self._autosave.start(20_000)
+
         self.editor.setFocus()
 
-    # --- transcript -----------------------------------------------------
+    # --- formatting -----------------------------------------------------
 
-    def _format(self, is_question: bool) -> QTextCharFormat:
-        fmt = QTextCharFormat()
-        fmt.setFont(QFont("Georgia", 13))
-        if is_question:
-            fmt.setFontItalic(True)
-            fmt.setForeground(QColor("#7a6fa8"))
-        return fmt
+    def _date_heading(self) -> str:
+        return self.page.day.strftime("%A, %d %B %Y").upper()
 
-    def _write(self, text: str, is_question: bool, new_block: bool) -> None:
-        cursor = self.transcript.textCursor()
-        cursor.movePosition(cursor.MoveOperation.End)
-        if new_block and self.transcript.toPlainText():
+    def _writing_format(self) -> tuple[QTextBlockFormat, QTextCharFormat]:
+        bf = QTextBlockFormat()
+        bf.setProperty(IS_QUESTION, False)
+        bf.setTopMargin(0)
+        bf.setBottomMargin(10)
+        bf.setLineHeight(150.0, PROPORTIONAL)
+        cf = QTextCharFormat()
+        cf.setFont(QFont(BODY_FONT, BODY_SIZE))
+        cf.setForeground(QColor(INK))
+        cf.setFontItalic(False)
+        return bf, cf
+
+    def _question_format(self) -> tuple[QTextBlockFormat, QTextCharFormat]:
+        bf = QTextBlockFormat()
+        bf.setProperty(IS_QUESTION, True)
+        bf.setLeftMargin(24)
+        bf.setTopMargin(10)
+        bf.setBottomMargin(12)
+        bf.setLineHeight(150.0, PROPORTIONAL)
+        cf = QTextCharFormat()
+        cf.setFont(QFont(BODY_FONT, BODY_SIZE - 1))
+        cf.setForeground(QColor(QUESTION_INK))
+        cf.setFontItalic(True)
+        return bf, cf
+
+    # --- rendering ------------------------------------------------------
+
+    def _render_page(self) -> None:
+        """Paint the stored page into the editor."""
+        self.editor.blockSignals(True)
+        self.editor.clear()
+        cursor = self.editor.textCursor()
+        first = True
+        for block in self.page.blocks:
+            bf, cf = (
+                self._question_format()
+                if block.kind == QUESTION
+                else self._writing_format()
+            )
+            for line in block.text.split("\n"):
+                if not first:
+                    cursor.insertBlock()
+                first = False
+                cursor.setBlockFormat(bf)
+                cursor.setCharFormat(cf)
+                cursor.insertText(line)
+        self.editor.blockSignals(False)
+
+        if self.page.blocks:
+            self._start_writing_block(cursor)
+        else:
+            bf, cf = self._writing_format()
+            cursor.setBlockFormat(bf)
+            cursor.setCharFormat(cf)
+            self.editor.setTextCursor(cursor)
+            self.editor.setCurrentCharFormat(cf)
+            self.editor.setPlaceholderText(
+                random.choice(starters()) + "\n\nStart writing…"
+            )
+
+    def _start_writing_block(self, cursor: QTextCursor) -> None:
+        """Open a fresh, un-styled paragraph for the writer to continue in."""
+        bf, cf = self._writing_format()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        if cursor.block().text().strip() or cursor.block().blockFormat().property(
+            IS_QUESTION
+        ):
             cursor.insertBlock()
-            cursor.insertBlock()
-        cursor.setCharFormat(self._format(is_question))
-        cursor.insertText(text)
-        self.transcript.setTextCursor(cursor)
-        self.transcript.ensureCursorVisible()
+        cursor.setBlockFormat(bf)
+        cursor.setCharFormat(cf)
+        self.editor.setTextCursor(cursor)
+        self.editor.setCurrentCharFormat(cf)
 
-    def _record(self, speaker: str, text: str) -> None:
-        self.session.turns.append(Turn(speaker, text))
+    # --- reading the document back --------------------------------------
 
-    def append_turn(self, speaker: str, text: str) -> None:
-        self._write(text, speaker == "ai", new_block=True)
-        self._record(speaker, text)
+    def harvest(self) -> list[Block]:
+        """Read the editor back into blocks, using the per-paragraph marker."""
+        blocks: list[Block] = []
+        kind: str | None = None
+        buffer: list[str] = []
+
+        def flush() -> None:
+            if kind is None:
+                return
+            text = "\n".join(buffer).strip("\n")
+            if text.strip():
+                blocks.append(Block(kind, text))
+
+        block = self.editor.document().begin()
+        while block.isValid():
+            line_kind = (
+                QUESTION if block.blockFormat().property(IS_QUESTION) else WRITING
+            )
+            if line_kind != kind:
+                flush()
+                kind = line_kind
+                buffer = [block.text()]
+            else:
+                buffer.append(block.text())
+            block = block.next()
+        flush()
+        return blocks
+
+    def _update_counter(self) -> None:
+        self.page.blocks = self.harvest()
+        words = self.page.words
+        self.counter.setText(f"{words} words" if words else "")
 
     # --- actions --------------------------------------------------------
 
     def ensure_engine(self) -> Engine | None:
         if self.engine is not None:
             return self.engine
-        self.statusBar().showMessage("Loading model (first run downloads ~2.5GB)…")
+        self.statusBar().showMessage("Loading model…")
         QApplication.processEvents()
         try:
-            self.engine = Engine(self.model_path, self.session.prompt_version)
+            self.engine = Engine(self.model_path, DEFAULT_PROMPT)
         except Exception as exc:  # noqa: BLE001
             self.statusBar().showMessage(f"Model unavailable — {exc}")
             return None
@@ -171,17 +295,15 @@ class Window(QMainWindow):
         return self.engine
 
     def request_question(self) -> None:
-        text = self.editor.toPlainText().strip()
-        if not text or (self.worker and self.worker.isRunning()):
+        if self.worker and self.worker.isRunning():
+            return
+        self.page.blocks = self.harvest()
+        if not self.page.words:
+            self.statusBar().showMessage("Write something first.", 2500)
             return
 
-        # Disable before the model load, which blocks: otherwise a second
-        # click can land while the first is still waiting on it.
         self.ask_button.setEnabled(False)
         self.ask_button.setText("Thinking…")
-
-        self.append_turn("me", text)
-        self.editor.clear()
         self.save_now()
 
         engine = self.ensure_engine()
@@ -189,30 +311,41 @@ class Window(QMainWindow):
             self._reset_button()
             return
 
+        self._streaming = False
         self.statusBar().showMessage("Thinking…")
-        self._streaming_started = False
-        self.worker = AskWorker(engine, self.session)
+        self.worker = AskWorker(engine, self.page)
         self.worker.token.connect(self.on_token)
         self.worker.finished_ok.connect(self.on_question)
         self.worker.failed.connect(self.on_failure)
         self.worker.start()
 
-    def on_token(self, chunk: str) -> None:
-        first = not self._streaming_started
-        self._streaming_started = True
-        self._write(chunk, is_question=True, new_block=first)
+    def _open_question_block(self, cursor: QTextCursor) -> None:
+        bf, cf = self._question_format()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        if self.editor.document().lastBlock().text().strip():
+            cursor.insertBlock()
+        cursor.setBlockFormat(bf)
+        cursor.setCharFormat(cf)
 
-    def _reset_button(self) -> None:
-        self.ask_button.setEnabled(True)
-        self.ask_button.setText("Ask me something")
+    def on_token(self, chunk: str) -> None:
+        cursor = self.editor.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        if not self._streaming:
+            self._streaming = True
+            self._open_question_block(cursor)
+        cursor.insertText(chunk)
+        self.editor.setTextCursor(cursor)
+        self.editor.ensureCursorVisible()
 
     def on_question(self, question: str) -> None:
         self.statusBar().clearMessage()
         self._reset_button()
-        if not self._streaming_started:
-            self.append_turn("ai", question)
-        else:
-            self._record("ai", question)
+        cursor = self.editor.textCursor()
+        if not self._streaming:
+            self._open_question_block(cursor)
+            cursor.insertText(question)
+        # Drop the writer straight back into their own voice, below the note.
+        self._start_writing_block(cursor)
         self.save_now()
         self.editor.setFocus()
 
@@ -220,24 +353,27 @@ class Window(QMainWindow):
         self._reset_button()
         self.statusBar().showMessage(f"No question this time — {message}")
 
+    def _reset_button(self) -> None:
+        self.ask_button.setEnabled(True)
+        self.ask_button.setText("Ask me something")
+
     def stop_generation(self) -> None:
         if self.engine and self.worker and self.worker.isRunning():
             self.engine.stop()
             self.statusBar().showMessage("Stopped.", 2000)
 
     def save_now(self) -> None:
-        if not self.session.turns:
+        self.page.blocks = self.harvest()
+        if not self.page.blocks:
             return
         try:
-            path = save(self.session, JOURNAL_DIR)
-            self.statusBar().showMessage(f"Saved {path.name}", 2000)
+            save(self.page, self.journal_dir)
+            self.statusBar().showMessage(f"Saved {datetime.now():%H:%M}", 1800)
         except OSError as exc:
             self.statusBar().showMessage(f"COULD NOT SAVE — {exc}")
 
     def closeEvent(self, event):
-        pending = self.editor.toPlainText().strip()
-        if pending:
-            self.append_turn("me", pending)
+        self._autosave.stop()
         self.save_now()
         if self.worker and self.worker.isRunning():
             self.stop_generation()

@@ -2,9 +2,14 @@
 
 A journal that thinks with you.
 
-You write. When you want, you press `Ctrl+Enter` and it asks **one** open
-question about something specific you wrote. Not "how did that make you feel" —
-something you actually skipped over.
+One page a day. You write down it, and when you want, you click **Ask me
+something** and one open question appears in the margin, right where you
+stopped. Not "how did that make you feel" — something you actually skipped over.
+
+It is deliberately **not** a chat. There is no transcript, no input box, no
+send. Your words stay exactly where you typed them and you keep writing past
+the question. That one property is most of what separates a journal from a
+chatbot.
 
 It runs entirely on your machine. No account, no network, no upload. A journal
 is the most private text you own, and an app that uploads it has a trust problem
@@ -59,11 +64,32 @@ Four pieces, deliberately separable:
 | `journal/store.py` | Sessions as Markdown on disk. Knows nothing about AI. |
 | `journal/engine.py` | Wraps NobodyWho. Knows nothing about the UI or disk. |
 | `journal/prompts/` | The system prompts, as versioned files. Not code. |
-| `journal/ui.py` | The writing surface. Knows nothing about the model. |
+| `journal/ui.py` | The page. Knows nothing about the model. |
 
-Entries are saved to `~/Documents/journal/` as plain Markdown with one file per
-session. Plain text on purpose — your journal outlives this app, and you can
-grep it.
+The unit is the **day**, not a session. Pages are saved to
+`~/Documents/journal/2026-09-03.md`, one file per date — close the app and
+reopen it after dinner and you are back on the same page, cursor at the end.
+It autosaves every 20 seconds.
+
+Your writing is stored as ordinary paragraphs. Questions are stored as Markdown
+blockquotes, so the file reads correctly anywhere and your own words remain the
+bulk of it:
+
+```markdown
+---
+date: 2026-09-03
+---
+
+Rewrote the export pipeline today. Fine, I guess. Standup was the usual.
+I mentioned the deadline slipping again but it got skipped over.
+
+> Why did you mention the deadline slipping again but it got skipped over
+> in standup?
+
+Honestly I think nobody wants to own it.
+```
+
+Plain text on purpose — your journal outlives this app, and you can grep it.
 
 Writing is never blocked by the AI. If the model is missing, downloading, or
 broken, this is still a text editor that saves your work.
@@ -100,8 +126,10 @@ people delete after a week.
 python -m pytest
 ```
 
-21 tests, no model required — the engine is tested against a stub, so the suite
-runs in well under a second.
+37 tests, no model required — the engine is tested against a stub, so the suite
+runs in well under a second. The UI tests cover the one genuinely fragile part:
+whether a question stays marked as a question through editing, saving and
+reopening, rather than bleeding into your own words.
 
 ## Not in v1
 

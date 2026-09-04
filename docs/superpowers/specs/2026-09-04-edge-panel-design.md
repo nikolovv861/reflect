@@ -85,8 +85,13 @@ date: 2026-09-04
 ---
 
 [09:14] call the bank
+
 [11:02] annoyed at the standup again
 ```
+
+Captures are separated by a blank line. A single newline would make a run of
+them one CommonMark paragraph, and they would read as a single run-on block in
+any Markdown viewer — which the file format explicitly promises not to do.
 
 **Why a prefix rather than a new block type.** `parse()` merges consecutive
 writing lines into a single block — blank lines do not separate them, because
@@ -116,6 +121,12 @@ notice, and it cannot notice it if the times are stripped.
   Qt.WindowStaysOnTopHint`. `Tool` keeps it off the taskbar and out of Alt-Tab.
 - **Two geometries:** a ~6px tab and a ~320px panel, both computed by a pure
   function of `(screen_geometry, edge)`. This is the testable part.
+- **Edges: left and right only.** Not four. The panel occupies 60% of the
+  screen's *height*, which is meaningless on a top or bottom edge — those
+  would need a second geometry function computing a width fraction instead,
+  and a second set of tests, to buy an edge nobody asked for. `settings.py`
+  silently coerces any unknown `edge` value to `"right"` rather than refusing
+  to start.
 - **Slide:** `QPropertyAnimation` on `geometry`, ~150ms.
 - **Retract delay:** ~400ms after the mouse leaves, so a pointer crossing the
   edge on its way somewhere else does not make the panel flicker.
@@ -126,8 +137,24 @@ notice, and it cannot notice it if the times are stripped.
   directory, alongside `notes/`. On first run the default is the right edge of
   the primary screen. If a remembered screen is gone (laptop undocked), fall
   back to the primary screen rather than opening off-screen.
+- **Quit:** right-click for a **Quit** action, also bound to Ctrl+Q. `Qt.Tool`
+  keeps the panel off the taskbar and out of Alt-Tab and the process outlives
+  the journal window, so without this Task Manager was the only way out.
 - **Known limitation:** full-screen applications and games will cover it. Not
   worth fighting.
+
+### Known deferrals
+
+Deliberate, and not to be read as things the code already does:
+
+- **`save_settings()` is not wired to any UI.** The edge and the screen are
+  chosen by hand-editing `panel.json` in the journal directory. The writer
+  exists; nothing calls it.
+- **No single-instance guard.** Autostart plus a manual `reflect-panel` launch
+  stacks two panels on the same edge, both writing to the same page.
+- **No runtime handling of a screen being removed.** The undock fallback in
+  `resolve_screen()` only applies at startup: unplugging a monitor while the
+  panel is running leaves it wherever it was.
 
 ## Handoff
 
@@ -157,7 +184,16 @@ the rest of the app.
 - `[HH:MM]` prefix survives render → parse → render
 - `entries()` splits a merged writing block back into separate entries
 - `entries()` on a pre-change page with no prefixes
-- Collapsed and expanded rects for each of the four edges on a fake screen
+- Collapsed and expanded rects for the left and right edges on a fake screen
+- A capture appended while the journal window is open survives that window's
+  next save, and appears in it
+- The panel follows the clock across midnight when constructed without an
+  explicit day, and the journal it opens agrees on the day
+- `append_capture` leaves an existing page's `model`/`prompt_version` alone
+- The journal's `destroyed` firing after the panel's widgets are gone
+- `collapse()` declining while the capture box has focus or the pointer is
+  over the panel, and retracting to the resting strip when neither holds
+- The quit action asking the application to quit
 
 **Not tested, verified by hand:** the slide animation, hover enter/leave
 timing, always-on-top behaviour, the registry write. Mocking Qt hover events

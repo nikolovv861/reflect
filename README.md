@@ -44,6 +44,10 @@ To start it with Windows:
 reflect-panel --autostart on    # and --autostart off to undo
 ```
 
+To stop it: right-click the panel and choose **Quit**, or press **Ctrl+Q**
+while it has focus. It sits outside the taskbar and Alt-Tab, so this is the
+way out.
+
 The panel captures thoughts only. Core values and goals live in the journal
 window, and there are deliberately no to-dos — a to-do has state and a thought
 does not.

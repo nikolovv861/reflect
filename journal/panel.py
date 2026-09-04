@@ -11,9 +11,11 @@ from datetime import date as Date
 from datetime import datetime
 from pathlib import Path
 
+import shiboken6
 from PySide6.QtCore import Qt, QEasingCurve, QPropertyAnimation, QRect, QTimer, Signal
-from PySide6.QtGui import QGuiApplication, QKeyEvent
+from PySide6.QtGui import QAction, QGuiApplication, QKeyEvent, QKeySequence
 from PySide6.QtWidgets import (
+    QApplication,
     QLayout,
     QListWidget,
     QListWidgetItem,
@@ -173,6 +175,19 @@ class PanelWindow(QWidget):
 
         self.setGeometry(QRect(*self._rect(expanded=False)))
 
+        # Qt.Tool keeps this window out of the taskbar and out of Alt-Tab, and
+        # the process outlives the journal window, so without this there is no
+        # way to stop the panel short of Task Manager.
+        self.quit_action = QAction("Quit", self)
+        self.quit_action.setShortcut(QKeySequence("Ctrl+Q"))
+        self.quit_action.triggered.connect(self.quit)
+        self.addAction(self.quit_action)
+        self.setContextMenuPolicy(Qt.ActionsContextMenu)
+
+    def quit(self) -> None:
+        """Stop the panel process."""
+        QApplication.quit()
+
     # --- placement ------------------------------------------------------
 
     def _screen_rect(self) -> tuple[int, int, int, int]:
@@ -221,6 +236,9 @@ class PanelWindow(QWidget):
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:  # noqa: ANN001
+        # NOT redundant with collapse()'s re-arm: this is the only thing that
+        # arms the timer from rest, so the panel would never retract without
+        # it. Leave it unconditional.
         self._retract.start()
         super().leaveEvent(event)
 
@@ -252,13 +270,16 @@ class PanelWindow(QWidget):
 
     def _flush_journal(self) -> None:
         """Give the page back to disk before a capture is appended to it."""
-        if self.journal is not None:
+        if self._journal_alive():
             self.journal.save_now()
 
     def _reload_journal(self) -> None:
         """Show the open window the capture that just landed underneath it."""
-        if self.journal is not None:
+        if self._journal_alive():
             self.journal.reload_from_disk()
+
+    def _journal_alive(self) -> bool:
+        return self.journal is not None and shiboken6.isValid(self.journal)
 
     def _journal_closed(self, _obj=None) -> None:
         """Forget the window, so its Engine -- and the model -- can be freed.
@@ -266,16 +287,19 @@ class PanelWindow(QWidget):
         Qt passes the destroyed QObject as an argument; accept and ignore it.
         """
         self.journal = None
-        self.panel.refresh()
+        # The weakref in open_journal() only proves the Python PanelWindow is
+        # still alive; it says nothing about its C++ side. On app quit with
+        # the journal still open, the panel's widgets are torn down first and
+        # the journal's `destroyed` fires afterwards -- refreshing then hits
+        # `RuntimeError: Internal C++ object already deleted`. So check C++
+        # liveness as well before touching any widget.
+        if shiboken6.isValid(self) and shiboken6.isValid(self.panel):
+            self.panel.refresh()
 
 
 def main() -> int:
     import argparse
     import sys
-
-    from PySide6.QtWidgets import QApplication
-
-    from journal import autostart
 
     parser = argparse.ArgumentParser(prog="reflect-panel")
     parser.add_argument(
@@ -286,6 +310,11 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.autostart:
+        try:
+            from journal import autostart
+        except ModuleNotFoundError:  # winreg: Windows only
+            print("autostart is only available on Windows")
+            return 2
         if args.autostart == "on":
             autostart.enable()
         elif args.autostart == "off":

@@ -9,7 +9,13 @@ import pytest
 
 pytest.importorskip("PySide6")
 
+import shiboken6  # noqa: E402
+from PySide6.QtCore import QRect, Qt  # noqa: E402
+from PySide6.QtGui import QGuiApplication, QKeySequence  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
+
+from journal.geometry import collapsed_rect  # noqa: E402
+from journal.settings import resolve_screen  # noqa: E402
 
 from journal import panel as panel_module  # noqa: E402
 from journal.panel import Panel, PanelWindow  # noqa: E402
@@ -233,3 +239,114 @@ def test_with_no_explicit_day_the_journal_opens_the_day_the_panel_writes_to(
     finally:
         win.journal._autosave.stop()
 
+
+# --- teardown order: the journal outliving the panel's C++ side -----------
+#
+# The weakref in open_journal() proves the PANEL OBJECT is still alive in
+# Python. It says nothing about whether Qt has already deleted the widgets
+# underneath it, which is exactly what happens when the app quits with the
+# journal still open: the panel's C++ side goes first, the journal's
+# `destroyed` fires afterwards, and refreshing the list raises.
+def test_the_journal_closing_after_the_panel_is_deleted_does_not_raise(app, tmp_path):
+    win = PanelWindow(journal_dir=tmp_path, day=DAY)
+    win.open_journal()
+    win.journal._autosave.stop()
+    shiboken6.delete(win.panel)
+
+    win._journal_closed()  # must not raise RuntimeError
+
+    assert win.journal is None
+
+
+def test_a_capture_committed_after_the_journals_c_side_is_gone_does_not_raise(
+    app, tmp_path
+):
+    win = PanelWindow(journal_dir=tmp_path, day=DAY)
+    win.open_journal()
+    win.journal._autosave.stop()
+    shiboken6.delete(win.journal)
+
+    win.panel.capture_box.setPlainText("still worth keeping")
+    win.panel.commit()  # must not raise
+
+    page = load(path_for(tmp_path, DAY))
+    assert "still worth keeping" in "\n".join(b.text for b in page.blocks)
+
+
+# --- there has to be a way out --------------------------------------------
+
+
+def test_the_panel_offers_a_quit_action(panel_window):
+    assert panel_window.quit_action in panel_window.actions()
+    assert panel_window.quit_action.text() == "Quit"
+    assert panel_window.contextMenuPolicy() == Qt.ActionsContextMenu
+
+
+def test_quit_is_bound_to_ctrl_q(panel_window):
+    assert panel_window.quit_action.shortcut() == QKeySequence("Ctrl+Q")
+
+
+def test_triggering_quit_asks_the_application_to_quit(panel_window, monkeypatch):
+    called = []
+
+    class _App:
+        @staticmethod
+        def quit():
+            called.append(True)
+
+    monkeypatch.setattr(panel_module, "QApplication", _App)
+    panel_window.quit_action.trigger()
+    assert called == [True]
+
+
+# --- the collapse guard ----------------------------------------------------
+#
+# collapse() declines while you are still typing or still pointing at the
+# panel, and re-arms its own timer so it retries. Nothing else re-arms that
+# single-shot timer, so a decline that did not re-arm would leave the panel
+# stuck open forever.
+
+
+def _expected_collapsed(win):
+    screens = QGuiApplication.screens()
+    available = screens[resolve_screen(win.settings, len(screens))].availableGeometry()
+    screen = (
+        available.x(),
+        available.y(),
+        available.width(),
+        available.height(),
+    )
+    return QRect(*collapsed_rect(screen, win.settings.edge))
+
+
+def test_collapse_declines_while_the_capture_box_has_focus(panel_window):
+    panel_window._expanded = True
+    panel_window.panel.capture_box.hasFocus = lambda: True
+    panel_window.underMouse = lambda: False
+
+    panel_window.collapse()
+
+    assert panel_window._expanded is True
+    assert panel_window._retract.isActive()
+
+
+def test_collapse_declines_while_the_pointer_is_over_the_panel(panel_window):
+    panel_window._expanded = True
+    panel_window.panel.capture_box.hasFocus = lambda: False
+    panel_window.underMouse = lambda: True
+
+    panel_window.collapse()
+
+    assert panel_window._expanded is True
+    assert panel_window._retract.isActive()
+
+
+def test_collapse_retracts_to_the_resting_strip_when_nothing_blocks_it(panel_window):
+    panel_window._expanded = True
+    panel_window.panel.capture_box.hasFocus = lambda: False
+    panel_window.underMouse = lambda: False
+
+    panel_window.collapse()
+
+    assert panel_window._expanded is False
+    assert panel_window._animation.endValue() == _expected_collapsed(panel_window)

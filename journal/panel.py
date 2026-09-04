@@ -310,16 +310,20 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.autostart:
+        from journal import autostart
+
+        # autostart imports winreg lazily, inside each function -- so the
+        # failure lands here, not on the import above, and a bare traceback
+        # is not an answer to "can I have this on Linux".
         try:
-            from journal import autostart
-        except ModuleNotFoundError:  # winreg: Windows only
-            print("autostart is only available on Windows")
+            if args.autostart == "on":
+                autostart.enable()
+            elif args.autostart == "off":
+                autostart.disable()
+            print("autostart:", "on" if autostart.is_enabled() else "off")
+        except ModuleNotFoundError:
+            print("autostart is Windows-only")
             return 2
-        if args.autostart == "on":
-            autostart.enable()
-        elif args.autostart == "off":
-            autostart.disable()
-        print("autostart:", "on" if autostart.is_enabled() else "off")
         return 0
 
     app = QApplication(sys.argv)

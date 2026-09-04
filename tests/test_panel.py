@@ -101,3 +101,26 @@ def test_captures_are_already_on_the_page_the_journal_opens(panel_window, tmp_pa
     panel_window.open_journal()
     text = "\n".join(b.text for b in panel_window.journal.page.blocks)
     assert "annoyed at the standup" in text
+
+
+# The destroyed signal is connected through a weakref, not a plain bound
+# method (`self.journal.destroyed.connect(self._journal_closed)`). A plain
+# bound method makes the Window hold an indirect strong reference back to
+# the PanelWindow (via the Qt connection), forming a PanelWindow<->Window
+# reference cycle. With no event loop running and the journal never closed,
+# earlier test runs hit this cycle and crashed with a Windows access
+# violation during garbage collection. This test drives the real close path
+# (WA_DeleteOnClose + a pumped event loop) so it fails if that weakref
+# indirection is ever "simplified" away.
+def test_the_journal_can_be_closed_and_reopened(panel_window):
+    panel_window.open_journal()
+    assert panel_window.journal is not None
+    panel_window.journal._autosave.stop()
+    panel_window.journal.close()
+    QApplication.processEvents()
+    QApplication.processEvents()
+    assert panel_window.journal is None
+
+    panel_window.open_journal()
+    assert panel_window.journal is not None
+    assert panel_window.journal.page.day == DAY

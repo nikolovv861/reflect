@@ -1,11 +1,14 @@
-from datetime import date
+from datetime import date, time
 from pathlib import Path
 
 from journal.store import (
     QUESTION,
     WRITING,
     Block,
+    Entry,
     Page,
+    append_capture,
+    entries,
     list_pages,
     load,
     open_day,
@@ -132,6 +135,57 @@ def test_saving_twice_in_a_day_overwrites_one_file(tmp_path: Path):
 
 def test_list_pages_tolerates_missing_dir(tmp_path: Path):
     assert list_pages(tmp_path / "nope") == []
+
+
+def test_capture_writes_a_prefixed_line(tmp_path):
+    page = append_capture(tmp_path, "call the bank", at=time(9, 14), day=date(2026, 9, 4))
+    assert page.blocks == [Block(WRITING, "[09:14] call the bank")]
+    assert "[09:14] call the bank" in path_for(tmp_path, date(2026, 9, 4)).read_text(encoding="utf-8")
+
+
+def test_two_captures_share_one_block_but_stay_separate_entries(tmp_path):
+    append_capture(tmp_path, "call the bank", at=time(9, 14), day=date(2026, 9, 4))
+    page = append_capture(tmp_path, "annoyed at standup", at=time(11, 2), day=date(2026, 9, 4))
+    assert len(page.blocks) == 1
+    assert entries(page) == [
+        Entry(time(9, 14), "call the bank"),
+        Entry(time(11, 2), "annoyed at standup"),
+    ]
+
+
+def test_capture_survives_a_save_and_reload(tmp_path):
+    append_capture(tmp_path, "call the bank", at=time(9, 14), day=date(2026, 9, 4))
+    reloaded = load(path_for(tmp_path, date(2026, 9, 4)))
+    assert entries(reloaded) == [Entry(time(9, 14), "call the bank")]
+
+
+def test_a_multi_line_capture_stays_one_entry(tmp_path):
+    page = append_capture(
+        tmp_path, "annoyed at standup\nagain", at=time(11, 2), day=date(2026, 9, 4)
+    )
+    assert page.blocks[0].text == "[11:02] annoyed at standup\n        again"
+    assert entries(page) == [Entry(time(11, 2), "annoyed at standup\nagain")]
+
+
+def test_a_capture_after_a_question_starts_a_new_block(tmp_path):
+    append_capture(tmp_path, "first", at=time(9, 0), day=date(2026, 9, 4))
+    page = load(path_for(tmp_path, date(2026, 9, 4)))
+    page.blocks.append(Block(QUESTION, "What happened?"))
+    save(page, tmp_path)
+    page = append_capture(tmp_path, "second", at=time(10, 0), day=date(2026, 9, 4))
+    assert [b.kind for b in page.blocks] == [WRITING, QUESTION, WRITING]
+
+
+def test_entries_reads_a_page_written_before_prefixes_existed():
+    page = Page(day=date(2026, 9, 3), model="m", prompt_version="p")
+    page.blocks = [Block(WRITING, "Long stretch of writing.")]
+    assert entries(page) == [Entry(None, "Long stretch of writing.")]
+
+
+def test_entries_ignores_questions():
+    page = Page(day=date(2026, 9, 3), model="m", prompt_version="p")
+    page.blocks = [Block(QUESTION, "What happened?")]
+    assert entries(page) == []
 
 
 # --- standing notes --------------------------------------------------------

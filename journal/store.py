@@ -11,9 +11,11 @@ remain the bulk of it.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import date as Date
 from datetime import datetime
+from datetime import time as Time
 from pathlib import Path
 
 WRITING = "me"
@@ -138,6 +140,80 @@ def open_day(
         page.prompt_version = prompt_version
         return page
     return Page(day=day, model=model, prompt_version=prompt_version)
+
+
+# --- captures --------------------------------------------------------------
+
+CAPTURE = re.compile(r"^\[(\d{2}):(\d{2})\] ?(.*)$")
+INDENT = " " * 8  # len("[HH:MM] "), so continuation lines align under the text
+
+
+@dataclass
+class Entry:
+    """One thing you typed into the panel, as the panel shows it back."""
+
+    at: Time | None
+    text: str
+
+
+def entries(page: Page) -> list[Entry]:
+    """Split the page's writing back into the captures it was typed as.
+
+    `parse()` merges consecutive writing lines into a single block, so the
+    `[HH:MM]` prefix -- not the block boundary -- is what separates one
+    capture from the next. Text with no prefix (any page written before
+    captures existed) comes back as a single untimed entry per block.
+    """
+    found: list[Entry] = []
+    for block in page.blocks:
+        if block.kind != WRITING:
+            continue
+        current: Entry | None = None
+        for line in block.text.splitlines():
+            match = CAPTURE.match(line)
+            if match:
+                hour, minute, rest = match.groups()
+                current = Entry(Time(int(hour), int(minute)), rest)
+                found.append(current)
+            elif current is not None and line.startswith(INDENT):
+                current.text += "\n" + line[len(INDENT) :]
+            elif current is not None:
+                current.text += "\n" + line
+            elif line.strip():
+                current = Entry(None, line)
+                found.append(current)
+    return [Entry(e.at, e.text.strip()) for e in found if e.text.strip()]
+
+
+def append_capture(
+    directory: Path,
+    text: str,
+    at: Time | None = None,
+    day: Date | None = None,
+    model: str = "unknown",
+    prompt_version: str = "unknown",
+) -> Page:
+    """Append one timestamped thought to the day's page and save it.
+
+    `model` and `prompt_version` are placeholders: the panel never loads a
+    model, and `open_day()` overwrites both when the journal opens the page.
+    """
+    day = day or datetime.now().date()
+    at = at or datetime.now().time()
+    page = open_day(directory, model, prompt_version, day)
+
+    lines = text.strip().splitlines() or [""]
+    rendered = f"[{at.hour:02d}:{at.minute:02d}] {lines[0]}"
+    for line in lines[1:]:
+        rendered += f"\n{INDENT}{line}"
+
+    if page.blocks and page.blocks[-1].kind == WRITING:
+        page.blocks[-1].text += "\n" + rendered
+    else:
+        page.blocks.append(Block(WRITING, rendered))
+
+    save(page, directory)
+    return page
 
 
 def practice_day(directory: Path, practice: str, upto: Date) -> int:

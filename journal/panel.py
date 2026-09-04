@@ -13,6 +13,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QEasingCurve, QPropertyAnimation, QRect, QTimer
 from PySide6.QtGui import QGuiApplication, QKeyEvent
 from PySide6.QtWidgets import (
+    QLayout,
     QListWidget,
     QListWidgetItem,
     QPushButton,
@@ -113,6 +114,14 @@ class PanelWindow(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.panel)
+        # The layout's minimum size (driven by the capture box and the
+        # "open journal" button) would otherwise pin this window far wider
+        # than the resting tab -- the collapsed strip must be able to shrink
+        # past what its contents need, since nothing in it is legible at
+        # TAB width anyway.
+        layout.setSizeConstraint(QLayout.SetNoConstraint)
+        self.setMinimumWidth(0)
+        self.panel.setMinimumWidth(0)
 
         self.setMouseTracking(True)
         self._expanded = False

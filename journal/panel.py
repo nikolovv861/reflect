@@ -160,8 +160,15 @@ class PanelWindow(QWidget):
             self._slide_to(True)
 
     def collapse(self) -> None:
-        if self._expanded and not self.panel.capture_box.hasFocus():
-            self._slide_to(False)
+        if not self._expanded:
+            return
+        # A blocked retract that never retries leaves the panel stuck open
+        # forever, since nothing else re-arms the single-shot timer -- so
+        # re-check on the same interval until both guards clear.
+        if self.panel.capture_box.hasFocus() or self.underMouse():
+            self._retract.start()
+            return
+        self._slide_to(False)
 
     # --- hover ----------------------------------------------------------
 

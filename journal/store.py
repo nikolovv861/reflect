@@ -195,12 +195,18 @@ def append_capture(
 ) -> Page:
     """Append one timestamped thought to the day's page and save it.
 
-    `model` and `prompt_version` are placeholders: the panel never loads a
-    model, and `open_day()` overwrites both when the journal opens the page.
+    `model` and `prompt_version` are used ONLY when this creates the page. An
+    existing page keeps whatever provenance it already recorded: the panel
+    never loads a model, and overwriting a real `model:` with a placeholder
+    would destroy the record of what actually wrote the page -- permanently,
+    if the journal is never reopened that day.
     """
     day = day or datetime.now().date()
     at = at or datetime.now().time()
-    page = open_day(directory, model, prompt_version, day)
+    path = path_for(directory, day)
+    page = load(path) if path.exists() else Page(
+        day=day, model=model, prompt_version=prompt_version
+    )
 
     lines = text.strip().splitlines() or [""]
     rendered = f"[{at.hour:02d}:{at.minute:02d}] {lines[0]}"
@@ -208,7 +214,10 @@ def append_capture(
         rendered += f"\n{INDENT}{line}"
 
     if page.blocks and page.blocks[-1].kind == WRITING:
-        page.blocks[-1].text += "\n" + rendered
+        # A blank line between captures: one newline would make consecutive
+        # captures a single CommonMark paragraph, running them together in any
+        # Markdown viewer. The file has to read correctly outside this app.
+        page.blocks[-1].text += "\n\n" + rendered
     else:
         page.blocks.append(Block(WRITING, rendered))
 

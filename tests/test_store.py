@@ -167,6 +167,46 @@ def test_a_multi_line_capture_stays_one_entry(tmp_path):
     assert entries(page) == [Entry(time(11, 2), "annoyed at standup\nagain")]
 
 
+def test_a_capture_preserves_the_pages_existing_frontmatter(tmp_path):
+    """The panel has no model. It must not overwrite the record of one."""
+    save(
+        Page(day=date(2026, 9, 4), model="qwen-4b", prompt_version="v3-buried"),
+        tmp_path,
+    )
+    page = append_capture(tmp_path, "call the bank", at=time(9, 14), day=date(2026, 9, 4))
+    assert (page.model, page.prompt_version) == ("qwen-4b", "v3-buried")
+    reloaded = load(path_for(tmp_path, date(2026, 9, 4)))
+    assert (reloaded.model, reloaded.prompt_version) == ("qwen-4b", "v3-buried")
+
+
+def test_a_capture_creating_a_page_uses_the_given_placeholders(tmp_path):
+    page = append_capture(tmp_path, "call the bank", at=time(9, 14), day=date(2026, 9, 4))
+    assert (page.model, page.prompt_version) == ("unknown", "unknown")
+
+
+def test_consecutive_captures_are_separate_markdown_paragraphs(tmp_path):
+    """One newline would run them together in any Markdown viewer."""
+    append_capture(tmp_path, "call the bank", at=time(9, 14), day=date(2026, 9, 4))
+    append_capture(tmp_path, "annoyed at standup", at=time(11, 2), day=date(2026, 9, 4))
+    text = path_for(tmp_path, date(2026, 9, 4)).read_text(encoding="utf-8")
+    assert "[09:14] call the bank\n\n[11:02] annoyed at standup" in text
+
+
+def test_separated_captures_still_round_trip_through_the_file(tmp_path):
+    append_capture(tmp_path, "call the bank", at=time(9, 14), day=date(2026, 9, 4))
+    append_capture(
+        tmp_path, "annoyed at standup\nagain", at=time(11, 2), day=date(2026, 9, 4)
+    )
+    append_capture(tmp_path, "home late", at=time(19, 30), day=date(2026, 9, 4))
+    reloaded = load(path_for(tmp_path, date(2026, 9, 4)))
+    assert len(reloaded.blocks) == 1
+    assert entries(reloaded) == [
+        Entry(time(9, 14), "call the bank"),
+        Entry(time(11, 2), "annoyed at standup\nagain"),
+        Entry(time(19, 30), "home late"),
+    ]
+
+
 def test_a_capture_after_a_question_starts_a_new_block(tmp_path):
     append_capture(tmp_path, "first", at=time(9, 0), day=date(2026, 9, 4))
     page = load(path_for(tmp_path, date(2026, 9, 4)))

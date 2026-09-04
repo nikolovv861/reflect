@@ -28,6 +28,26 @@ reflect
 First launch downloads the model (~2.5GB, once). After that it opens offline in
 about two seconds, forever.
 
+## The edge panel
+
+`reflect-panel` puts a thin strip at the right edge of the screen. Touch it
+with the mouse and it slides out; type a thought and press Enter and it is
+saved into today's page with the time. Shift+Enter makes a new line.
+
+It never loads the model, so it costs almost nothing to leave running. Click
+*open journal* and the full window opens on today with your captures already
+on the page, ready for a question.
+
+To start it with Windows:
+
+```bash
+reflect-panel --autostart on    # and --autostart off to undo
+```
+
+The panel captures thoughts only. Core values and goals live in the journal
+window, and there are deliberately no to-dos — a to-do has state and a thought
+does not.
+
 ## Requirements
 
 - **Windows.** See the Linux note below.

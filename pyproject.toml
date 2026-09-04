@@ -13,6 +13,7 @@ dev = ["pytest>=8.0"]
 
 [project.scripts]
 reflect = "journal.ui:main"
+reflect-panel = "journal.panel:main"
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -227,11 +227,32 @@ class PanelWindow(QWidget):
 
 
 def main() -> int:
+    import argparse
     import sys
 
     from PySide6.QtWidgets import QApplication
 
+    from journal import autostart
+
+    parser = argparse.ArgumentParser(prog="reflect-panel")
+    parser.add_argument(
+        "--autostart",
+        choices=("on", "off", "status"),
+        help="start the panel when Windows starts",
+    )
+    args = parser.parse_args()
+
+    if args.autostart:
+        if args.autostart == "on":
+            autostart.enable()
+        elif args.autostart == "off":
+            autostart.disable()
+        print("autostart:", "on" if autostart.is_enabled() else "off")
+        return 0
+
     app = QApplication(sys.argv)
+    # The journal window closing must not end the process -- the panel is
+    # still resting at the edge.
     app.setQuitOnLastWindowClosed(False)
     window = PanelWindow()
     window.show()

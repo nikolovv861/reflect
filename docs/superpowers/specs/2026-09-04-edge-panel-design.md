@@ -17,6 +17,11 @@ thin tab. Touch it with the mouse and it slides out; move away and it retracts.
 You type a thought, press Enter, and it is saved into today's page. That is the
 whole panel.
 
+**Enter saves and clears; Shift+Enter inserts a newline.** A capture may be
+several lines long — only the first carries the `[HH:MM]` prefix, and the
+continuation lines are indented so the boundary still reads correctly on
+reload.
+
 The panel is the front door. Clicking through opens the journal window you
 already have, with the day's captures already on the page, ready for
 *Ask me something*.
@@ -117,8 +122,10 @@ notice, and it cannot notice it if the times are stripped.
 - **Focus:** `WA_ShowWithoutActivating`, so sliding out never steals focus from
   whatever you are typing in. The panel takes focus only when you click into
   the capture box.
-- **Persistence:** chosen screen and edge saved to a small JSON settings file
-  next to the journal directory.
+- **Persistence:** chosen screen and edge saved to `panel.json` in the journal
+  directory, alongside `notes/`. On first run the default is the right edge of
+  the primary screen. If a remembered screen is gone (laptop undocked), fall
+  back to the primary screen rather than opening off-screen.
 - **Known limitation:** full-screen applications and games will cover it. Not
   worth fighting.
 

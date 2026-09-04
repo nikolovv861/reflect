@@ -6,6 +6,7 @@ text. Everything else lives in the journal window.
 """
 from __future__ import annotations
 
+import weakref
 from datetime import date as Date
 from datetime import datetime
 from pathlib import Path
@@ -25,7 +26,7 @@ from PySide6.QtWidgets import (
 from journal.geometry import collapsed_rect, expanded_rect
 from journal.settings import load_settings, resolve_screen
 from journal.store import append_capture, entries, open_day
-from journal.ui import INK, JOURNAL_DIR, PAPER
+from journal.ui import INK, JOURNAL_DIR, PAPER, Window
 
 
 class CaptureBox(QTextEdit):
@@ -111,6 +112,9 @@ class PanelWindow(QWidget):
         self.setAttribute(Qt.WA_ShowWithoutActivating)
 
         self.panel = Panel(journal_dir=self.journal_dir, day=day)
+        self.day = day
+        self.journal: Window | None = None
+        self.panel.open_button.clicked.connect(self.open_journal)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.panel)
@@ -188,6 +192,38 @@ class PanelWindow(QWidget):
     def leaveEvent(self, event) -> None:  # noqa: ANN001
         self._retract.start()
         super().leaveEvent(event)
+
+    # --- journal handoff --------------------------------------------------
+
+    def open_journal(self) -> None:
+        """Build the journal window, or raise the one already open.
+
+        The model is not loaded here -- `Window.ensure_engine()` still defers
+        that to the first question, so opening the journal stays cheap.
+        """
+        if self.journal is None:
+            self.journal = Window(journal_dir=self.journal_dir, day=self.day)
+            self.journal.setAttribute(Qt.WA_DeleteOnClose)
+            weak_self = weakref.ref(self)
+
+            def _on_destroyed(_obj=None):
+                inst = weak_self()
+                if inst is not None:
+                    inst._journal_closed()
+
+            self.journal.destroyed.connect(_on_destroyed)
+        self.journal.show()
+        self.journal.raise_()
+        self.journal.activateWindow()
+        self.collapse()
+
+    def _journal_closed(self, _obj=None) -> None:
+        """Forget the window, so its Engine -- and the model -- can be freed.
+
+        Qt passes the destroyed QObject as an argument; accept and ignore it.
+        """
+        self.journal = None
+        self.panel.refresh()
 
 
 def main() -> int:

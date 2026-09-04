@@ -11,7 +11,7 @@ from datetime import date as Date
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QEasingCurve, QPropertyAnimation, QRect, QTimer
+from PySide6.QtCore import Qt, QEasingCurve, QPropertyAnimation, QRect, QTimer, Signal
 from PySide6.QtGui import QGuiApplication, QKeyEvent
 from PySide6.QtWidgets import (
     QLayout,
@@ -47,11 +47,28 @@ class CaptureBox(QTextEdit):
 
 
 class Panel(QWidget):
+    # Emitted around the append, so whoever else may be holding the same page
+    # can hand it over and take it back. See PanelWindow.__init__ for why the
+    # order of these two matters.
+    about_to_commit = Signal()
+    committed = Signal()
+
     def __init__(self, journal_dir: Path | None = None, day: Date | None = None):
         super().__init__()
         self.journal_dir = journal_dir or JOURNAL_DIR
-        self.day = day or datetime.now().date()
+        # Kept as given -- None means "whatever day it is when you look". The
+        # panel runs for weeks under autostart, so a date resolved once in
+        # __init__ would freeze it on its construction day and quietly append
+        # tonight's thoughts to a page from last Tuesday.
+        self._day = day
+        self._build()
 
+    @property
+    def day(self) -> Date:
+        """The day being written to right now."""
+        return self._day or datetime.now().date()
+
+    def _build(self) -> None:
         self.list = QListWidget()
         self.list.setWordWrap(True)
         self.list.setSelectionMode(QListWidget.NoSelection)
@@ -80,9 +97,12 @@ class Panel(QWidget):
         text = self.capture_box.toPlainText().strip()
         if not text:
             return
-        append_capture(self.journal_dir, text, day=self.day)
+        day = self.day
+        self.about_to_commit.emit()
+        append_capture(self.journal_dir, text, day=day)
         self.capture_box.clear()
         self.refresh()
+        self.committed.emit()
 
     def refresh(self) -> None:
         page = open_day(self.journal_dir, "unknown", "unknown", self.day)
@@ -115,6 +135,17 @@ class PanelWindow(QWidget):
         self.day = day
         self.journal: Window | None = None
         self.panel.open_button.clicked.connect(self.open_journal)
+
+        # One owner of the page at a time. The journal window saves by
+        # overwriting the whole file from its own in-memory blocks, so if a
+        # capture were appended while the window still held unflushed content,
+        # the window's next save would silently destroy it. Hence the fixed
+        # order: flush the window to disk FIRST, then the capture lands on top
+        # of flushed content, then the window re-reads what is now on disk.
+        # Flushing after the append would reintroduce exactly that bug.
+        self.panel.about_to_commit.connect(self._flush_journal)
+        self.panel.committed.connect(self._reload_journal)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.panel)
@@ -202,7 +233,9 @@ class PanelWindow(QWidget):
         that to the first question, so opening the journal stays cheap.
         """
         if self.journal is None:
-            self.journal = Window(journal_dir=self.journal_dir, day=self.day)
+            # The panel's resolved day, not the day this window was built on:
+            # with no explicit day those differ the moment midnight passes.
+            self.journal = Window(journal_dir=self.journal_dir, day=self.panel.day)
             self.journal.setAttribute(Qt.WA_DeleteOnClose)
             weak_self = weakref.ref(self)
 
@@ -216,6 +249,16 @@ class PanelWindow(QWidget):
         self.journal.raise_()
         self.journal.activateWindow()
         self.collapse()
+
+    def _flush_journal(self) -> None:
+        """Give the page back to disk before a capture is appended to it."""
+        if self.journal is not None:
+            self.journal.save_now()
+
+    def _reload_journal(self) -> None:
+        """Show the open window the capture that just landed underneath it."""
+        if self.journal is not None:
+            self.journal.reload_from_disk()
 
     def _journal_closed(self, _obj=None) -> None:
         """Forget the window, so its Engine -- and the model -- can be freed.

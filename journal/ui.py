@@ -710,6 +710,22 @@ class Window(QMainWindow):
         except OSError as exc:
             self.statusBar().showMessage(f"COULD NOT SAVE — {exc}")
 
+    def reload_from_disk(self) -> None:
+        """Re-read the day's page and re-render it, discarding nothing.
+
+        Additive: nothing in the standalone `reflect` flow calls this. It
+        exists so the edge panel can show this window a capture it appended
+        underneath it -- and only ever AFTER the panel has had this window
+        flush its own blocks first, so there is nothing unsaved to lose.
+        """
+        if self.mode != PAGE:
+            return
+        self.page = open_day(
+            self.journal_dir, self.model_path, DEFAULT_PROMPT, self.page.day
+        )
+        self._render_page()
+        self._update_counter()
+
     def closeEvent(self, event):
         self._autosave.stop()
         self.save_now()

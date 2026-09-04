@@ -3,7 +3,7 @@ already in today's page is visible when you look at it.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
@@ -11,6 +11,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from journal import panel as panel_module  # noqa: E402
 from journal.panel import Panel, PanelWindow  # noqa: E402
 from journal.store import append_capture, entries, load, path_for  # noqa: E402
 
@@ -124,3 +125,111 @@ def test_the_journal_can_be_closed_and_reopened(panel_window):
     panel_window.open_journal()
     assert panel_window.journal is not None
     assert panel_window.journal.page.day == DAY
+
+
+# --- the journal must not overwrite what the panel appended ---------------
+#
+# `Window.save_now()` writes the WHOLE page from the editor's in-memory
+# blocks. Any capture the panel appended while that window was open is not in
+# those blocks, so the next autosave (or closeEvent) silently destroys it.
+def test_a_capture_survives_the_open_journals_next_save(app, tmp_path):
+    win = PanelWindow(journal_dir=tmp_path, day=DAY)
+    win.open_journal()
+    win.journal._autosave.stop()
+    try:
+        win.panel.capture_box.setPlainText("annoyed at the standup")
+        win.panel.commit()
+        win.journal.save_now()
+
+        on_disk = "\n".join(b.text for b in load(path_for(tmp_path, DAY)).blocks)
+        assert "annoyed at the standup" in on_disk
+
+        in_window = "\n".join(b.text for b in win.journal.page.blocks)
+        assert "annoyed at the standup" in in_window
+    finally:
+        win.journal._autosave.stop()
+
+
+def test_the_journal_keeps_its_own_writing_when_a_capture_arrives(app, tmp_path):
+    win = PanelWindow(journal_dir=tmp_path, day=DAY)
+    win.open_journal()
+    win.journal._autosave.stop()
+    try:
+        win.journal.editor.setPlainText("typed in the journal window")
+        win.panel.capture_box.setPlainText("typed in the panel")
+        win.panel.commit()
+
+        on_disk = "\n".join(b.text for b in load(path_for(tmp_path, DAY)).blocks)
+        assert "typed in the journal window" in on_disk
+        assert "typed in the panel" in on_disk
+    finally:
+        win.journal._autosave.stop()
+
+
+# --- the panel must follow the clock, not its construction date -----------
+
+
+class _Clock:
+    """Stands in for `datetime` so a test can move the day forward."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def now(self):
+        return self.value
+
+
+def test_the_panel_follows_the_clock_past_midnight(app, tmp_path, monkeypatch):
+    clock = _Clock(datetime(2026, 9, 4, 23, 59))
+    monkeypatch.setattr(panel_module, "datetime", clock)
+
+    p = Panel(journal_dir=tmp_path)
+    p.capture_box.setPlainText("before midnight")
+    p.commit()
+
+    clock.value = datetime(2026, 9, 5, 0, 1)
+    p.capture_box.setPlainText("after midnight")
+    p.commit()
+
+    yesterday = load(path_for(tmp_path, date(2026, 9, 4)))
+    assert [e.text for e in entries(yesterday)] == ["before midnight"]
+    today = load(path_for(tmp_path, date(2026, 9, 5)))
+    assert [e.text for e in entries(today)] == ["after midnight"]
+
+
+def test_the_panel_lists_the_new_days_captures_after_midnight(
+    app, tmp_path, monkeypatch
+):
+    clock = _Clock(datetime(2026, 9, 4, 23, 59))
+    monkeypatch.setattr(panel_module, "datetime", clock)
+
+    p = Panel(journal_dir=tmp_path)
+    p.capture_box.setPlainText("before midnight")
+    p.commit()
+    assert p.list.count() == 1
+
+    clock.value = datetime(2026, 9, 5, 0, 1)
+    p.refresh()
+    assert p.list.count() == 0
+
+
+def test_with_no_explicit_day_the_journal_opens_the_day_the_panel_writes_to(
+    app, tmp_path, monkeypatch
+):
+    # A date that is deliberately not the real today, so this cannot pass by
+    # both sides independently calling the same clock.
+    clock = _Clock(datetime(2019, 3, 7, 10, 0))
+    monkeypatch.setattr(panel_module, "datetime", clock)
+
+    win = PanelWindow(journal_dir=tmp_path)
+    win.panel.capture_box.setPlainText("a thought")
+    win.panel.commit()
+    win.open_journal()
+    try:
+        assert win.panel.day == date(2019, 3, 7)
+        assert win.journal.page.day == date(2019, 3, 7)
+        text = "\n".join(b.text for b in win.journal.page.blocks)
+        assert "a thought" in text
+    finally:
+        win.journal._autosave.stop()
+

@@ -1,0 +1,26 @@
+[project]
+name = "reflect"
+version = "0.1.0"
+description = "A private, local-only journal that asks one good question a day, powered by NobodyWho"
+requires-python = ">=3.10"
+dependencies = [
+    "nobodywho>=2.0.0",
+    "PySide6>=6.6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+reflect = "journal.app:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["journal*"]
+
+[tool.setuptools.package-data]
+"journal.prompts" = ["*.md", "*.txt"]
+"journal.practices" = ["*.md"]

@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+fixtures/results/
+fixtures/entries/*
+!fixtures/entries/README.md
+*.egg-info/
